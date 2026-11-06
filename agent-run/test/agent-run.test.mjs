@@ -70,6 +70,18 @@ test("mint sends only the sha256 of the secret to the pod", async () => {
   assert.ok(argv.includes(createHash("sha256").update(secret).digest("hex")));
 });
 
+test("a mint whose reply fails still revokes the key", async () => {
+  const pod = fakePod();
+  const runner = async (command, args) => {
+    const result = await pod.runner(command, args);
+    const op = args[args.indexOf(IN_POD_SCRIPT) + 1];
+    return op === "put" ? { code: 1, stdout: "", stderr: "" } : result;
+  };
+  const admin = new ClawRouterAdmin({}, { runner });
+  await assert.rejects(admin.mint("agentrun_test_000003"), /put failed/);
+  assert.equal(pod.state.get("agentrun_test_000003"), false);
+});
+
 test("revocation is proven only when the list says disabled and the router refuses the key", async () => {
   for (const [status, ok] of [[403, true], [401, true], [200, false]]) {
     const pod = fakePod();
@@ -84,11 +96,13 @@ test("revocation is proven only when the list says disabled and the router refus
 test("the Pi box config drops the laptop key and reads the per-run key from the environment", () => {
   const dir = mkdtempSync(join(tmpdir(), "agent-run-test-"));
   const modelsFile = join(dir, "models.json");
-  writeFileSync(modelsFile, JSON.stringify({ providers: { clawrouter: { baseUrl: "http://127.0.0.1:8798", apiKey: "laptop-secret", api: "anthropic-messages", models: [{ id: "m" }] } } }));
+  writeFileSync(modelsFile, JSON.stringify({ providers: { clawrouter: { baseUrl: "http://127.0.0.1:8798", apiKey: "laptop-secret", api: "anthropic-messages", models: [{ id: "m" }, { id: "o", api: "openai-responses", baseUrl: "http://127.0.0.1:8798/v1" }] } } }));
   const files = HARNESSES.pi.remoteConfig({ config: { piModelsFile: modelsFile, piProvider: "clawrouter" }, remoteBaseUrl: "http://127.0.0.1:18789" });
   const provider = JSON.parse(files["pi/models.json"]).providers.clawrouter;
   assert.equal(provider.apiKey, "$CLAWROUTER_API_KEY");
   assert.equal(provider.baseUrl, "http://127.0.0.1:18789");
+  assert.equal(provider.models[1].baseUrl, "http://127.0.0.1:18789/v1");
+  assert.equal(provider.models[0].baseUrl, undefined);
   assert.ok(!files["pi/models.json"].includes("laptop-secret"));
 });
 
@@ -103,7 +117,7 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError } = {}) {
     "pi-1.0.0-node24": { path: appliancePath, sha256, package: "p", version: "1.0.0" },
   }));
   const modelsFile = join(dir, "models.json");
-  writeFileSync(modelsFile, JSON.stringify({ providers: { clawrouter: { baseUrl: "x", apiKey: "laptop", models: [] } } }));
+  writeFileSync(modelsFile, JSON.stringify({ providers: { clawrouter: { baseUrl: "http://127.0.0.1:8798", apiKey: "laptop", models: [] } } }));
   writeFileSync(join(dir, "prompt.md"), "say hi");
   const config = {
     cacheDir, stateDir: join(dir, "state"), piModelsFile: modelsFile, piProvider: "clawrouter",

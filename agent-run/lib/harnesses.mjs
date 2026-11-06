@@ -22,7 +22,15 @@ const pi = {
     const source = models?.providers?.[config.piProvider];
     if (!source) throw new Error("Pi models file has no " + config.piProvider + " provider");
     const { apiKey: _drop, ...provider } = source;
+    const localOrigin = provider.baseUrl ? new URL(provider.baseUrl).origin : null;
     provider.baseUrl = remoteBaseUrl;
+    // Models may carry their own baseUrl (e.g. "<origin>/v1" for openai-responses); move them to the tunnel, keep the path.
+    provider.models = (provider.models ?? []).map((model) => {
+      if (!model.baseUrl) return model;
+      const url = new URL(model.baseUrl);
+      if (url.origin !== localOrigin) throw new Error("Pi model " + model.id + " has a baseUrl outside the " + config.piProvider + " provider");
+      return { ...model, baseUrl: new URL(remoteBaseUrl).origin + url.pathname.replace(/\/$/, "") };
+    });
     provider.apiKey = "$CLAWROUTER_API_KEY";
     if (provider.headers) {
       for (const [name, value] of Object.entries(provider.headers)) {

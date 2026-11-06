@@ -90,9 +90,17 @@ export class ClawRouterAdmin {
   async mint(name) {
     if (!NAME.test(name)) throw new Error("invalid key name");
     const secret = randomBytes(24).toString("hex");
-    const credentials = await this.#pod("put", name, sha256Hex(secret));
-    const entry = credentials.find((c) => c.credentialId === name);
-    if (!entry?.enabled) throw new Error("ClawRouter did not report the new key as enabled");
+    try {
+      const credentials = await this.#pod("put", name, sha256Hex(secret));
+      const entry = credentials.find((c) => c.credentialId === name);
+      if (!entry?.enabled) throw new Error("ClawRouter did not report the new key as enabled");
+    } catch (error) {
+      // The put may have landed even when its reply failed; never leave the key enabled.
+      await this.revoke(name).catch((revokeError) => {
+        error.message += "; revoke after failed mint also failed: " + revokeError.message;
+      });
+      throw error;
+    }
     return { name, token: "clawrouter-live-" + name + "-" + secret };
   }
 
