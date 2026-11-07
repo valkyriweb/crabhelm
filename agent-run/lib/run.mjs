@@ -14,6 +14,14 @@ export const EXIT_QUEUED = 75;
 export const EXIT_INFRA = 3;
 export const EXIT_REVOKE_UNPROVEN = 4;
 
+function readPlacementDecision(path) {
+  const decision = JSON.parse(readFileSync(path, "utf8"));
+  if (!decision || !["local", "remote", "queue"].includes(decision.placement)) {
+    throw new Error("invalid --placement-decision: placement must be local, remote or queue");
+  }
+  return decision;
+}
+
 export async function placement(config, { harness, runId, mode }, runner = run) {
   if (mode === "local" || mode === "remote") return { placement: mode, reason: "forced by --placement " + mode };
   const result = await runner(process.execPath, [
@@ -101,7 +109,9 @@ export async function agentRun(options, deps = {}) {
   };
   const writeReceipt = () => writeFileSync(join(out, "receipt.json"), JSON.stringify(receipt, null, 2) + "\n");
 
-  const decision = await (deps.placement ?? placement)(config, { harness: adapter.name, runId, mode: options.placement ?? "auto" }, runner);
+  const decision = options.placementDecision
+    ? readPlacementDecision(options.placementDecision)
+    : await (deps.placement ?? placement)(config, { harness: adapter.name, runId, mode: options.placement ?? "auto" }, runner);
   receipt.placement = decision;
   log.write("agent-run: placement=" + decision.placement + (decision.reason ? " (" + decision.reason + ")" : "") + "\n");
 

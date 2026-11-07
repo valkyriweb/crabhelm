@@ -1,9 +1,10 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { Writable } from "node:stream";
 import { test } from "node:test";
 import { applianceKey, boxPackages, buildAppliance, integrityMatches } from "../lib/appliance.mjs";
@@ -314,6 +315,57 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError, stopResul
   return fixture;
 }
 
+test("agent-run place prints the capacity decision and treats queued placement as a successful lookup", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-run-place-"));
+  const helper = join(dir, "placement.mjs");
+  const cli = fileURLToPath(new URL("../bin/agent-run.mjs", import.meta.url));
+  writeFileSync(helper, [
+    "const i = process.argv.indexOf('--task');",
+    "console.log(JSON.stringify({ placement: 'queue', reason: 'test queue', queueFile: process.argv[i + 1] }));",
+    "process.exitCode = 75;",
+  ].join("\n"));
+  const stdout = execFileSync(process.execPath, [cli, "place", "--harness", "pi", "--run-id", "fixture-123"], {
+    encoding: "utf8", env: { HOME: dir, PATH: process.env.PATH, AGENT_RUN_PLACEMENT: helper },
+  });
+  assert.deepEqual(JSON.parse(stdout), {
+    placement: "queue", reason: "test queue", queueFile: "agent-run/pi/fixture-123",
+  });
+});
+
+test("--placement-decision uses the supplied local decision without invoking the placement helper", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-run-decision-cli-"));
+  const binDir = join(dir, "bin");
+  const out = join(dir, "out");
+  const prompt = join(dir, "prompt.md");
+  const decisionFile = join(dir, "placement.json");
+  const invokedFile = join(dir, "pi-invoked");
+  const pi = join(binDir, "pi");
+  const helper = join(dir, "placement.mjs");
+  const cli = fileURLToPath(new URL("../bin/agent-run.mjs", import.meta.url));
+  mkdirSync(binDir);
+  writeFileSync(prompt, "say hi\n");
+  writeFileSync(decisionFile, JSON.stringify({ placement: "local", reason: "test local" }));
+  writeFileSync(helper, "process.exitCode = 2;\n");
+  writeFileSync(pi, `#!/bin/sh\ntouch "${invokedFile}"\n`);
+  chmodSync(pi, 0o755);
+
+  execFileSync(process.execPath, [cli, "--harness", "pi", "--prompt-file", prompt, "--out", out, "--placement-decision", decisionFile], {
+    encoding: "utf8", env: { HOME: dir, PATH: `${binDir}:/bin:/usr/bin`, AGENT_RUN_PLACEMENT: helper },
+  });
+  assert.equal(existsSync(invokedFile), true);
+  assert.equal(JSON.parse(readFileSync(join(out, "receipt.json"), "utf8")).placement.placement, "local");
+});
+
+test("agent-run place returns exit 2 when capacity placement fails", () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-run-place-failure-"));
+  const helper = join(dir, "placement.mjs");
+  const cli = fileURLToPath(new URL("../bin/agent-run.mjs", import.meta.url));
+  writeFileSync(helper, "process.exitCode = 2;\n");
+  assert.throws(() => execFileSync(process.execPath, [cli, "place", "--harness", "pi"], {
+    encoding: "utf8", env: { HOME: dir, PATH: process.env.PATH, AGENT_RUN_PLACEMENT: helper },
+  }), (error) => error.status === 2);
+});
+
 test("a remote run revokes the key and stops the lease after the harness exits", async () => {
   const f = remoteFixture({ runExit: 7 });
   const code = await agentRun(f.options, f.deps);
@@ -327,6 +379,20 @@ test("a remote run revokes the key and stops the lease after the harness exits",
   assert.ok(runCall.args.includes("-R") && runCall.args.includes("127.0.0.1:18789:router.example:8789"));
   for (const call of f.calls) assert.ok(!call.args.join(" ").includes(f.token), "key on argv of " + call.command);
   assert.ok(runCall.input.includes(f.token), "key travels on stdin");
+});
+
+test("a precomputed queue decision skips placement and removes its queue receipt after the remote run", async () => {
+  const f = remoteFixture();
+  const queueFile = join(f.dir, "queue.json");
+  const decisionFile = join(f.dir, "placement.json");
+  writeFileSync(queueFile, "queued\n");
+  writeFileSync(decisionFile, JSON.stringify({ placement: "queue", queueFile }));
+  f.options.placementDecision = decisionFile;
+  f.deps.placement = async () => { assert.fail("precomputed decision must not call placement again"); };
+
+  assert.equal(await agentRun(f.options, f.deps), 0);
+  assert.equal(existsSync(queueFile), false);
+  assert.equal(JSON.parse(readFileSync(join(f.options.out, "receipt.json"), "utf8")).queueReceiptRemoved, true);
 });
 
 test("a signal skips session download and proceeds to cleanup", async () => {
