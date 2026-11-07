@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, copyFileSync, symlinkSync, createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { childEnv, run } from "./proc.mjs";
 import { quote } from "./shell.mjs";
@@ -227,8 +227,25 @@ async function buildPinnedArtifactAppliance({ config, pins, harness, log, runner
     const asset = await pinnedArtifact(config, spec, fetcher, runner, log);
     const binary = join(stage, "bin", spec.bin);
     mkdirSync(join(stage, "bin"));
+    const bundleParts = [];
     if (spec.artifact.format === "binary") {
       copyFileSync(asset, binary);
+      chmodSync(binary, 0o755);
+    } else if (spec.artifact.format === "bundle") {
+      const bundleDir = spec.artifact.bundleDir;
+      const binPath = spec.artifact.binPath;
+      if (!bundleDir || bundleDir.startsWith("/") || bundleDir.split(/[\\/]/).includes("..") || !binPath || binPath.startsWith("/") || binPath.split(/[\\/]/).includes("..")) {
+        throw new Error("pinned release bundle needs safe relative bundleDir and binPath");
+      }
+      const bundle = join(stage, bundleDir);
+      mkdirSync(bundle, { recursive: true });
+      const unpacked = await runner("tar", ["-xzf", asset, "-C", bundle]);
+      if (unpacked.code !== 0) throw new Error("could not extract pinned release bundle");
+      const source = join(bundle, binPath);
+      if (!existsSync(source)) throw new Error("pinned release bundle lacks " + binPath);
+      chmodSync(source, 0o755);
+      symlinkSync(relative(dirname(binary), source), binary);
+      bundleParts.push(bundleDir);
     } else {
       const extracted = join(stage, "release");
       mkdirSync(extracted);
@@ -237,14 +254,14 @@ async function buildPinnedArtifactAppliance({ config, pins, harness, log, runner
       const source = join(extracted, spec.artifact.member);
       if (!existsSync(source)) throw new Error("pinned release artifact lacks " + spec.artifact.member);
       copyFileSync(source, binary);
+      chmodSync(binary, 0o755);
     }
-    chmodSync(binary, 0o755);
     const manifest = {
       harness, package: spec.package, version: spec.version, bin: spec.bin,
       platform: spec.platform, artifactSha256: spec.artifact.sha256, artifactSource: spec.artifact.source ?? null,
     };
     writeFileSync(join(stage, "agent-run-appliance.json"), JSON.stringify(manifest, null, 2) + "\n");
-    const packed = await runner("tar", ["-czf", partial, "-C", stage, "bin", "agent-run-appliance.json"], {
+    const packed = await runner("tar", ["-czf", partial, "-C", stage, "bin", "agent-run-appliance.json", ...bundleParts], {
       env: { ...process.env, COPYFILE_DISABLE: "1" },
     });
     if (packed.code !== 0) throw new Error("could not pack pinned release appliance");

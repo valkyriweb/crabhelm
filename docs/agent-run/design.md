@@ -49,7 +49,7 @@ No infrastructure change, no Access token and no tailnet key reach the box. The 
 
 ## Harness appliances
 
-Each npm harness has one pinned, content-addressed tarball: Node linux-x64 (SHASUMS-verified) plus the harness package at an exact version with its lockfile. Rusty uses a pinned Linux x86_64 release artifact downloaded through authenticated `gh release download`. Grok uses the official xAI CLI installer artifact for Linux x86_64, pinned by version and SHA-256. Both binary appliances package only the executable and manifest; credentials stay on the laptop.
+Each npm harness has one pinned, content-addressed tarball: Node linux-x64 (SHASUMS-verified) plus the harness package at an exact version with its lockfile. Rusty uses a pinned Linux x86_64 release artifact downloaded through authenticated `gh release download`. Grok uses the official xAI CLI installer artifact for Linux x86_64, pinned by version and SHA-256. Prime Agent uses its pinned Linux x64 release bundle, including the Python runtime and bundled resources. Credentials stay on the laptop.
 `agent-run appliance build <h>` works in two parts:
 
 1. The laptop resolves the npm lockfile (registry metadata only), downloads the linux-x64 glibc tarballs it lists, and checks each one against its lockfile integrity.
@@ -66,7 +66,7 @@ Each run streams the cached tarball over SSH; the box checks the sha256 before i
 | claude | `CLAUDE_CONFIG_DIR` per run, `ANTHROPIC_BASE_URL http://127.0.0.1:18789`, `ANTHROPIC_API_KEY` set from `CLAWROUTER_API_KEY` (sent as `x-api-key`, which ClawRouter accepts); `claude -p --bare --dangerously-skip-permissions`, prompt on stdin. The pin sets `ignoreScripts` and `entry`: the postinstall only copies the native binary over a stub, so the laptop links `bin/claude` to that binary instead. Project transcripts are copied back. |
 | rusty | Pinned rustyd 0.1.5 Linux x86_64 release artifact; rustyd print uses the Responses transport through the forwarded ClawRouter endpoint, an env-backed per-run OPENAI_API_KEY, and an isolated no-tools profile; session JSONL is returned under --out/session. |
 | grok | Pinned Grok CLI 1.0.78 Linux x86_64 binary; isolated `GROK_HOME`; custom model uses Chat Completions at `http://127.0.0.1:18789/v1` and env-backed `XAI_API_KEY`; session database is returned under --out/session. |
-| prime-agent | per-slice: identify and pin its Linux release artifact, then record its exact base-URL and key settings. |
+| prime-agent | Pinned Prime Agent 0.10.0 Linux x64 release bundle; isolated `HOME`; one print-mode turn uses OpenAI Responses at `http://127.0.0.1:18789/v1`, a custom model entry, env-backed `OPENAI_API_KEY`, and an isolated session directory under --out/session. Telemetry and startup network operations are disabled. |
 
 ClawRouter allows the `xai` provider on per-run keys under the approval recorded in PR #7 (merged SHA `97c1728257b17ea172f08405541ec887bbe2be53`). The Grok slice uses `xai/grok-4.7` through that provider.
 
