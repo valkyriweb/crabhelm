@@ -1,7 +1,7 @@
 import { randomBytes } from "node:crypto";
 import { createReadStream, createWriteStream, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { PassThrough } from "node:stream";
 import { ClawRouterAdmin, KEY_PREFIX, newKeyName } from "./clawrouter.mjs";
 import { Crabbox, sshCommand } from "./crabbox.mjs";
@@ -164,8 +164,13 @@ export async function agentRun(options, deps = {}) {
       if (!statSync(path).isFile()) throw new Error("--attach accepts files only: " + path);
       copyFileSync(path, join(stage, "inputs", "attach", basename(path)));
     }
+    for (const [rel, content] of Object.entries(adapter.workspaceFiles ?? {})) {
+      const path = join(stage, "inputs", rel);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, content, { mode: 0o600 });
+    }
     const remoteBaseUrl = "http://127.0.0.1:" + config.remotePort;
-    for (const [rel, content] of Object.entries(adapter.remoteConfig({ config, remoteBaseUrl, model: options.model }))) {
+    for (const [rel, content] of Object.entries(adapter.remoteConfig({ config, remoteBaseUrl, model: options.model, workdir }))) {
       mkdirSync(join(stage, "config", rel, ".."), { recursive: true });
       writeFileSync(join(stage, "config", rel), content, { mode: 0o600 });
     }

@@ -179,6 +179,13 @@ function openclawModel(model) {
 const openclaw = {
   name: "openclaw",
   bin: "openclaw",
+  workspaceFiles: {
+    "BOOTSTRAP.md": "This workspace is initialized for one task. Do not run onboarding or identity setup. Follow the task prompt and attached files.\n",
+    "IDENTITY.md": "# Identity\nThis is a disposable task-scoped software agent, not a human.\n",
+    "USER.md": "# User context\nUse only the supplied task prompt and attached files. No persistent user profile is provided.\n",
+    "SOUL.md": "# Operating principles\nFollow the task scope. Protect credentials and private data. Do not claim human identity.\n",
+    "memory/.keep": "",
+  },
   localArgv({ model, thinking, prompt, runId }) {
     return [
       "openclaw", "agent", "--local", "--agent", "main", "--session-id", runId,
@@ -188,7 +195,7 @@ const openclaw = {
       "--timeout", "840", "--json",
     ];
   },
-  remoteConfig({ remoteBaseUrl, model }) {
+  remoteConfig({ remoteBaseUrl, model, workdir }) {
     const selected = openclawModel(model);
     const url = new URL(remoteBaseUrl);
     const baseUrl = selected.provider === "openai" ? new URL("/v1", url).origin + "/v1" : url.origin;
@@ -196,7 +203,11 @@ const openclaw = {
     return {
       "openclaw/openclaw.json": JSON.stringify({
         gateway: { mode: "local" },
-        agents: { defaults: { model: { primary: selected.qualified }, models: { [selected.qualified]: {} } } },
+        agents: { defaults: {
+          model: { primary: selected.qualified },
+          models: { [selected.qualified]: {} },
+          workspace: workdir + "/inputs",
+        } },
         models: { providers: {
           [selected.provider]: {
             baseUrl,
