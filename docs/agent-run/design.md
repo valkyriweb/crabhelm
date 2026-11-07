@@ -7,6 +7,7 @@ Credential scheme: [credentials.md](credentials.md) (Luke's standing approval, d
 
 `agent-run --harness <h> --prompt-file F [--model M] [--thinking T] [--attach P..] [--out DIR]` runs one non-interactive harness turn.
 It asks Harbor capacity placement first. On `local` it runs the harness on the laptop. On `remote` or `queue` it runs the harness on a Crabbox broker lease without asking anyone.
+`agent-run place --harness <h> [--run-id ID]` prints the placement decision without running a harness. Pass that JSON file later with `--placement-decision FILE` to reuse the decision and avoid a second capacity check.
 It returns the harness exit code, streams stdout and stderr, and writes the session files plus `receipt.json` into `--out`.
 
 ## Where it lives
