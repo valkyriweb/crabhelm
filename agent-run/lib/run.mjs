@@ -106,7 +106,7 @@ export async function agentRun(options, deps = {}) {
   log.write("agent-run: placement=" + decision.placement + (decision.reason ? " (" + decision.reason + ")" : "") + "\n");
 
   if (decision.placement === "local") {
-    const argv = adapter.localArgv({ model: options.model, thinking: options.thinking, prompt, sessionDir: join(out, "session") });
+    const argv = adapter.localArgv({ model: options.model, thinking: options.thinking, prompt, sessionDir: join(out, "session"), runId });
     const output = tee(join(out, "stdout.txt"), stdout);
     const result = await runner(argv[0], argv.slice(1), { input: adapter.promptOnStdin ? prompt : undefined, stdout: output.stream, stderr: "inherit", env: childEnv() });
     await output.done();
@@ -165,7 +165,7 @@ export async function agentRun(options, deps = {}) {
       copyFileSync(path, join(stage, "inputs", "attach", basename(path)));
     }
     const remoteBaseUrl = "http://127.0.0.1:" + config.remotePort;
-    for (const [rel, content] of Object.entries(adapter.remoteConfig({ config, remoteBaseUrl }))) {
+    for (const [rel, content] of Object.entries(adapter.remoteConfig({ config, remoteBaseUrl, model: options.model }))) {
       mkdirSync(join(stage, "config", rel, ".."), { recursive: true });
       writeFileSync(join(stage, "config", rel), content, { mode: 0o600 });
     }
@@ -191,11 +191,11 @@ export async function agentRun(options, deps = {}) {
     const script = remoteRunScript({
       workdir, token: key.token,
       env: adapter.remoteEnv({ configDir: workdir + "/config", remoteBaseUrl }),
-      argv: adapter.remoteArgv({ config, model: options.model, thinking: options.thinking, sessionDir: workdir + "/out/session" }),
+      argv: adapter.remoteArgv({ config, model: options.model, thinking: options.thinking, sessionDir: workdir + "/out/session", runId, promptFile: workdir + "/inputs/prompt.md" }),
       promptAsArgument: adapter.promptAsArgument,
       promptOnStdin: adapter.promptOnStdin,
-      keyEnv: adapter.keyEnv,
-      collect: adapter.remoteCollect?.({ sessionDir: workdir + "/out/session" }) ?? [],
+      keyEnv: typeof adapter.keyEnv === "function" ? adapter.keyEnv({ model: options.model }) : adapter.keyEnv,
+      collect: adapter.remoteCollect?.({ configDir: workdir + "/config", sessionDir: workdir + "/out/session" }) ?? [],
     });
     const output = tee(join(out, "stdout.txt"), stdout);
     log.write("agent-run: running " + adapter.name + " on " + lease.leaseId + "\n");

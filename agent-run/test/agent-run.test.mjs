@@ -271,6 +271,56 @@ test("the Codex box config routes through the tunnel and names only the key vari
   assert.deepEqual(HARNESSES.codex.localArgv({ model: "clawrouter/gpt-x", prompt: "hi", sessionDir: "/s" }).slice(-3), ["gpt-x", "--", "hi"]);
 });
 
+test("OpenClaw maps allowed models to OpenAI or Anthropic and isolates state", () => {
+  const openai = HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/gpt-6-sol" });
+  const openaiConfig = JSON.parse(openai["openclaw/openclaw.json"]);
+  assert.equal(openaiConfig.gateway.mode, "local");
+  assert.equal(openaiConfig.agents.defaults.model.primary, "openai/gpt-6-sol");
+  assert.equal(openaiConfig.models.providers.openai.baseUrl, "http://127.0.0.1:18789/v1");
+  assert.equal(openaiConfig.models.providers.openai.api, "openai-completions");
+  assert.deepEqual(openaiConfig.models.providers.openai.apiKey, { source: "env", provider: "default", id: "OPENAI_API_KEY" });
+  assert.deepEqual(HARNESSES.openclaw.keyEnv({ model: "openai/gpt-6-sol" }), ["OPENAI_API_KEY"]);
+  const localArgv = HARNESSES.openclaw.localArgv({ model: "clawrouter/gpt-6-sol", prompt: "hi", runId: "local-1" });
+  assert.deepEqual(localArgv.slice(localArgv.indexOf("--model"), localArgv.indexOf("--model") + 2), ["--model", "clawrouter/gpt-6-sol"]);
+
+  const anthropic = HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/claude-sonnet-4.6" });
+  const anthropicConfig = JSON.parse(anthropic["openclaw/openclaw.json"]);
+  assert.equal(anthropicConfig.agents.defaults.model.primary, "anthropic/claude-sonnet-4.6");
+  assert.equal(anthropicConfig.models.providers.anthropic.baseUrl, "http://127.0.0.1:18789");
+  assert.equal(anthropicConfig.models.providers.anthropic.api, "anthropic-messages");
+  assert.deepEqual(HARNESSES.openclaw.keyEnv({ model: "anthropic/claude-sonnet-4.6" }), ["ANTHROPIC_API_KEY"]);
+  for (const model of ["xai/grok-4.7", "clawrouter/grok-4.7", "grok-4.7"]) {
+    assert.throws(() => HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model }), /XAI models are not allowed/);
+  }
+  assert.throws(() => HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/gemini-3" }), /must identify an OpenAI or Anthropic/);
+
+  assert.deepEqual(HARNESSES.openclaw.remoteEnv({ configDir: "/w/config" }), {
+    OPENCLAW_CONFIG_PATH: "/w/config/openclaw/openclaw.json",
+    OPENCLAW_STATE_DIR: "/w/config/openclaw/state",
+  });
+  assert.deepEqual(HARNESSES.openclaw.remoteArgv({
+    model: "clawrouter/gpt-6-sol", thinking: "high", runId: "agentrun_1", promptFile: "/w/inputs/prompt.md",
+  }), ["openclaw", "agent", "--local", "--agent", "main", "--session-id", "agentrun_1", "--message-file", "/w/inputs/prompt.md", "--model", "openai/gpt-6-sol", "--thinking", "high", "--timeout", "840", "--json"]);
+  assert.ok(HARNESSES.openclaw.remoteCollect({ configDir: "/w/config", sessionDir: "/w/out/session" })[0].includes("agents/main/sessions"));
+});
+
+test("OpenClaw remote run streams a single turn and collects its session", async () => {
+  const f = remoteFixture();
+  f.deps.pins.harnesses.openclaw = { package: "openclaw", version: "2026.7.1", bin: "openclaw" };
+  const index = join(f.deps.config.cacheDir, "appliances", "index.json");
+  const entries = JSON.parse(readFileSync(index, "utf8"));
+  writeFileSync(index, JSON.stringify({ ...entries, "openclaw-2026.7.1-node24": entries["pi-1.0.0-node24"] }));
+  assert.equal(await agentRun({ ...f.options, harness: "openclaw", model: "clawrouter/gpt-6-sol", thinking: "high" }, f.deps), 0);
+  const script = f.calls.find((c) => c.args.at(-1) === "bash -s").input;
+  assert.match(script, /^export OPENAI_API_KEY="\$CLAWROUTER_API_KEY"$/m);
+  assert.ok(script.includes("openclaw agent --local --agent main --session-id agentrun_"));
+  assert.ok(script.includes("--message-file "));
+  assert.ok(script.includes("--model openai/gpt-6-sol --thinking high --timeout 840 --json"));
+  assert.ok(script.includes("agents/main/sessions"));
+  assert.equal(script.match(new RegExp(f.token, "g")).length, 1, "the per-run key is injected only once");
+  assert.deepEqual(f.events, ["mint", "warmup", "revoke", "stop"]);
+});
+
 test("Claude gets the per-run key as ANTHROPIC_API_KEY, the prompt on stdin and the tunnel as base URL", async () => {
   const f = remoteFixture();
   f.deps.pins.harnesses.claude = { package: "c", version: "1.0.0", bin: "claude" };
