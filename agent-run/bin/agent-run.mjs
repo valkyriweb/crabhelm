@@ -19,7 +19,7 @@ const USAGE = [
   "  agent-run appliance build <harness>",
   "  agent-run sweep",
   "",
-  "Harnesses: " + Object.keys(HARNESSES).join(", ") + " (planned: " + PLANNED.join(", ") + ").",
+  "Harnesses: " + Object.keys(HARNESSES).join(", ") + (PLANNED.length ? " (planned: " + PLANNED.join(", ") + ")" : "") + ".",
   "Placement auto asks harbor-capacity-placement.mjs; queue and remote run on a Crabbox broker lease.",
   "Exit: the harness exit code; 75 no capacity; 3 agent-run failure; 4 key revocation not proven.",
 ].join("\n");

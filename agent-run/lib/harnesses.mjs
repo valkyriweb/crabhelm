@@ -288,6 +288,51 @@ const rusty = {
   promptOnStdin: true,
 };
 
+function primeModel(model) {
+  const id = (model ?? "gpt-6-sol").replace(/^clawrouter\//, "");
+  if (!/^gpt-[a-z0-9.-]+$/i.test(id)) throw new Error("prime: model must be a GPT model");
+  return id;
+}
+
+const PRIME_THINKING = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function primeArgs({ model, thinking, sessionDir }) {
+  if (thinking && !PRIME_THINKING.has(thinking)) throw new Error("prime: unknown thinking level " + thinking);
+  return ["prime-agent", "--offline", "--print", "--mode", "text", "--provider", "openai", "--model", primeModel(model),
+    "--session-dir", sessionDir + "/prime-agent", "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
+    ...(thinking ? ["--thinking", thinking] : [])];
+}
+
+const prime = {
+  name: "prime",
+  bin: "prime-agent",
+  localArgv({ model, thinking, prompt, sessionDir }) {
+    return [...primeArgs({ model, thinking, sessionDir }), "--", prompt];
+  },
+  remoteConfig({ remoteBaseUrl, model }) {
+    const id = primeModel(model);
+    return {
+      "prime/home/.prime/agent/models.json": JSON.stringify({
+        providers: { openai: {
+          baseUrl: new URL(remoteBaseUrl).origin + "/v1",
+          models: [{
+            id, name: id + " (ClawRouter)", api: "openai-responses",
+            reasoning: true, input: ["text"], contextWindow: 200000, maxTokens: 8192,
+          }],
+        } },
+      }, null, 2) + "\n",
+    };
+  },
+  remoteEnv({ configDir }) {
+    return { HOME: configDir + "/prime/home", PRIME_AGENT_TELEMETRY: "0" };
+  },
+  keyEnv: ["OPENAI_API_KEY"],
+  remoteArgv({ model, thinking, sessionDir }) {
+    return primeArgs({ model, thinking, sessionDir });
+  },
+  promptAsArgument: true,
+};
+
 const openclaw = {
   name: "openclaw",
   bin: "openclaw",
@@ -358,8 +403,8 @@ const openclaw = {
   },
 };
 
-export const HARNESSES = { pi, codex, claude, openclaw, rusty, grok };
-export const PLANNED = ["prime"];
+export const HARNESSES = { pi, codex, claude, openclaw, rusty, grok, prime };
+export const PLANNED = [];
 
 export function harness(name) {
   const adapter = HARNESSES[name];

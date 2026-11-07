@@ -39,6 +39,24 @@
         "sha256": "8e59eb3e32ef1a185de8ec5ebed7b64d30986abd5e20923d1695accca6e0645b"
       }
     },
+    "prime": {
+      "package": "prime-agent",
+      "version": "0.10.0",
+      "bin": "prime-agent",
+      "platform": "linux-x64",
+      "artifact": {
+        "url": "https://github.com/PrimeIntellect-ai/prime-agent/releases/download/v0.10.0/prime-agent-0.10.0-linux-x64.tar.gz",
+        "format": "bundle",
+        "githubRelease": {
+          "repo": "PrimeIntellect-ai/prime-agent",
+          "tag": "v0.10.0",
+          "asset": "prime-agent-0.10.0-linux-x64.tar.gz"
+        },
+        "bundleDir": "prime-agent",
+        "binPath": "prime-agent",
+        "sha256": "c16bd2af5e77b53f49b914a44742c4cf6a67c5ed5000041430b78dbd4c3bcbec"
+      }
+    },
     "rusty": {
       "package": "rustyd",
       "version": "0.1.5",

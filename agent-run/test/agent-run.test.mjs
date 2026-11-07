@@ -116,6 +116,45 @@ test("a pinned Linux binary release assembles a digest-addressed appliance", asy
   assert.ok(statSync(binary).mode & 0o111);
 });
 
+test("a pinned Linux release bundle preserves the executable runtime", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-run-prime-appliance-"));
+  const source = join(dir, "release");
+  mkdirSync(join(source, "prime-agent-runtime"), { recursive: true });
+  writeFileSync(join(source, "prime-agent"), "fake prime ELF binary\n", { mode: 0o755 });
+  writeFileSync(join(source, "prime-agent-runtime", "pyproject.toml"), "[project]\nname='rlm'\n");
+  const archive = join(dir, "prime.tar.gz");
+  execFileSync("tar", ["-czf", archive, "-C", source, "."]);
+  const bytes = readFileSync(archive);
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const release = { repo: "PrimeIntellect-ai/prime-agent", tag: "v0.10.0", asset: "prime-agent-0.10.0-linux-x64.tar.gz" };
+  const pins = { harnesses: { prime: {
+    package: "prime-agent", version: "0.10.0", bin: "prime-agent", platform: "linux-x64",
+    artifact: { format: "bundle", githubRelease: release, sha256: digest, bundleDir: "prime-agent", binPath: "prime-agent" },
+  } } };
+  const appliance = await buildAppliance({
+    config: { cacheDir: join(dir, "cache") }, pins, harness: "prime", log: sink(),
+    runner: async (command, args, options = {}) => {
+      if (command === "gh") {
+        assert.ok(args.includes(release.asset));
+        assert.equal(options.env.GH_PROMPT_DISABLED, "1");
+        writeFileSync(join(args.at(-1), release.asset), bytes);
+        return { code: 0, stdout: "", stderr: "" };
+      }
+      execFileSync(command, args, { env: options.env });
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.equal(appliance.key, applianceKey(pins, "prime"));
+  assert.equal(appliance.sourceSha256, digest);
+  assert.equal(appliance.builtOn, "github-release");
+  const unpacked = join(dir, "unpacked");
+  mkdirSync(unpacked);
+  execFileSync("tar", ["-xzf", appliance.path, "-C", unpacked]);
+  assert.equal(readFileSync(join(unpacked, "bin", "prime-agent"), "utf8"), "fake prime ELF binary\n");
+  assert.equal(readFileSync(join(unpacked, "prime-agent", "prime-agent-runtime", "pyproject.toml"), "utf8"), "[project]\nname='rlm'\n");
+  assert.ok(statSync(join(unpacked, "bin", "prime-agent")).mode & 0o111);
+});
+
 test("stopping a lease the coordinator never created counts as stopped", async () => {
   const runner = async () => ({ code: 0, stdout: "", stderr: "coordinator POST /v1/leases/s/release: http 404: {\"error\":\"not_found\"}\n" });
   assert.deepEqual(await new Crabbox({ crabboxProvider: "serve" }, { runner }).stop("s"), { stopped: true, absent: true, exitCode: 0, lease: null });
@@ -251,6 +290,8 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError, stopResul
       if (existsSync(profile)) calls.at(-1).rustyProfile = JSON.parse(readFileSync(profile, "utf8"));
       const grokConfig = join(args[3], "config/grok/home/.grok/config.toml");
       if (existsSync(grokConfig)) calls.at(-1).grokConfig = readFileSync(grokConfig, "utf8");
+      const primeConfig = join(args[3], "config/prime/home/.prime/agent/models.json");
+      if (existsSync(primeConfig)) calls.at(-1).primeConfig = JSON.parse(readFileSync(primeConfig, "utf8"));
       writeFileSync(args[1], "");
     }
     if (options.input && typeof options.input.resume === "function") {
@@ -376,6 +417,29 @@ test("Grok uses the xAI ClawRouter route with a per-run key and isolated profile
   assert.deepEqual(HARNESSES.grok.localArgv({ thinking: "max", prompt: "hi" }).slice(-2), ["--reasoning-effort", "xhigh"]);
 });
 
+test("Prime Agent configures OpenAI Responses through the tunnel and isolates its profile", () => {
+  const files = HARNESSES.prime.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/gpt-6-sol" });
+  const config = JSON.parse(files["prime/home/.prime/agent/models.json"]);
+  assert.equal(config.providers.openai.baseUrl, "http://127.0.0.1:18789/v1");
+  assert.deepEqual(config.providers.openai.models[0], {
+    id: "gpt-6-sol", name: "gpt-6-sol (ClawRouter)", api: "openai-responses", reasoning: true,
+    input: ["text"], contextWindow: 200000, maxTokens: 8192,
+  });
+  assert.equal(config.providers.openai.apiKey, undefined);
+  assert.equal(config.providers.openai.models[0].apiKey, undefined);
+  assert.deepEqual(HARNESSES.prime.remoteEnv({ configDir: "/w/config" }), {
+    HOME: "/w/config/prime/home", PRIME_AGENT_TELEMETRY: "0",
+  });
+  assert.deepEqual(HARNESSES.prime.keyEnv, ["OPENAI_API_KEY"]);
+  assert.deepEqual(HARNESSES.prime.remoteArgv({ model: "clawrouter/gpt-6-sol", thinking: "high", sessionDir: "/w/out/session" }), [
+    "prime-agent", "--offline", "--print", "--mode", "text", "--provider", "openai", "--model", "gpt-6-sol",
+    "--session-dir", "/w/out/session/prime-agent", "--no-context-files", "--no-skills", "--no-prompt-templates", "--no-themes",
+    "--thinking", "high",
+  ]);
+  assert.deepEqual(HARNESSES.prime.localArgv({ model: "gpt-6-sol", prompt: "hi", sessionDir: "/s" }).slice(-2), ["--", "hi"]);
+  assert.throws(() => HARNESSES.prime.remoteArgv({ model: "xai/grok-4.7", sessionDir: "/s" }), /must be a GPT model/);
+});
+
 test("OpenClaw maps allowed models to OpenAI or Anthropic and isolates state", () => {
   const openai = HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/gpt-6-sol", workdir: "/w" });
   const openaiConfig = JSON.parse(openai["openclaw/openclaw.json"]);
@@ -455,6 +519,30 @@ test("Grok remote run uses the xAI key, pinned appliance, and isolated session",
   const archive = f.calls.find((call) => call.command === "tar" && call.args[0] === "-czf");
   assert.match(archive.grokConfig, /^model = "xai\/grok-4\.7"$/m);
   assert.ok(archive.grokConfig.includes("base_url = \"http://127.0.0.1:18789/v1\""));
+  assert.deepEqual(f.events, ["mint", "warmup", "revoke", "stop"]);
+});
+
+test("Prime Agent remote run injects an OpenAI per-run key and isolates sessions", async () => {
+  const f = remoteFixture();
+  const digest = "c16bd2af5e77b53f49b914a44742c4cf6a67c5ed5000041430b78dbd4c3bcbec";
+  f.deps.pins.harnesses.prime = {
+    package: "prime-agent", version: "0.10.0", bin: "prime-agent", platform: "linux-x64",
+    artifact: { format: "bundle", sha256: digest, bundleDir: "prime-agent", binPath: "prime-agent" },
+  };
+  const key = applianceKey(f.deps.pins, "prime");
+  const index = join(f.deps.config.cacheDir, "appliances", "index.json");
+  const entries = JSON.parse(readFileSync(index, "utf8"));
+  writeFileSync(index, JSON.stringify({ ...entries, [key]: {
+    path: join(f.deps.config.cacheDir, "appliances/pi.tgz"),
+    sha256: createHash("sha256").update("appliance").digest("hex"), package: "prime-agent", version: "0.10.0",
+  } }));
+  assert.equal(await agentRun({ ...f.options, harness: "prime", model: "clawrouter/gpt-6-sol", thinking: "high" }, f.deps), 0);
+  const script = f.calls.find((call) => call.args.at(-1) === "bash -s").input;
+  assert.match(script, /^export OPENAI_API_KEY="\$CLAWROUTER_API_KEY"$/m);
+  assert.match(script, /prime-agent --offline --print --mode text --provider openai --model gpt-6-sol --session-dir .* --no-context-files --no-skills --no-prompt-templates --no-themes --thinking high --/);
+  assert.equal(script.match(new RegExp(f.token, "g")).length, 1, "the key appears once, in the injected environment");
+  const archive = f.calls.find((call) => call.command === "tar" && call.args[0] === "-czf");
+  assert.equal(archive.primeConfig.providers.openai.baseUrl, "http://127.0.0.1:18789/v1");
   assert.deepEqual(f.events, ["mint", "warmup", "revoke", "stop"]);
 });
 
