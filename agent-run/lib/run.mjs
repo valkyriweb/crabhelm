@@ -63,7 +63,7 @@ export async function sweep(config, admin, log = process.stderr) {
   return revoked;
 }
 
-function remoteRunScript({ workdir, token, env, argv, promptAsArgument }) {
+function remoteRunScript({ workdir, token, env, argv, promptAsArgument, collect = [] }) {
   const exports = Object.entries(env).map(([k, v]) => "export " + k + "=" + quote(v));
   const promptArg = promptAsArgument ? " -- \"$(cat \"$W/inputs/prompt.md\")\"" : "";
   return [
@@ -74,7 +74,11 @@ function remoteRunScript({ workdir, token, env, argv, promptAsArgument }) {
     ...exports,
     "export CLAWROUTER_API_KEY=" + quote(token),
     "cd \"$W/inputs\"",
-    "exec " + argv.map(quote).join(" ") + promptArg + " </dev/null",
+    "set +e",
+    argv.map(quote).join(" ") + promptArg + " </dev/null",
+    "rc=$?",
+    ...collect.map((line) => "{ " + line + "; } >&2 || true"),
+    "exit $rc",
     "",
   ].join("\n");
 }
@@ -143,9 +147,10 @@ export async function agentRun(options, deps = {}) {
     key = await admin.mint(runId);
     receipt.key = { name: runId, minted: true };
     log.write("agent-run: minted per-run key " + runId + "\n");
+    if (interrupted) throw new Error("interrupted");
 
     leaseRequested = true;
-    const lease = await crabbox.warmup(slug, log);
+    const lease = await crabbox.warmup(slug, log, { onSpawn: step });
     receipt.target.leaseId = lease.leaseId;
     if (interrupted) throw new Error("interrupted");
     const base = await crabbox.sshArgv(slug);
@@ -184,6 +189,7 @@ export async function agentRun(options, deps = {}) {
       env: adapter.remoteEnv({ configDir: workdir + "/config" }),
       argv: adapter.remoteArgv({ config, model: options.model, thinking: options.thinking, sessionDir: workdir + "/out/session" }),
       promptAsArgument: adapter.promptAsArgument,
+      collect: adapter.remoteCollect?.({ sessionDir: workdir + "/out/session" }) ?? [],
     });
     const output = tee(join(out, "stdout.txt"), stdout);
     log.write("agent-run: running " + adapter.name + " on " + lease.leaseId + "\n");
@@ -229,6 +235,10 @@ export async function agentRun(options, deps = {}) {
       const stop = await crabbox.stop(slug).catch((error) => ({ stopped: false, error: String(error) }));
       receipt.target.cleanup = stop;
       log.write("agent-run: lease cleanup stopped=" + stop.stopped + " slug=" + slug + "\n");
+      if (!stop.stopped) {
+        log.write("agent-run: lease NOT stopped; run: crabbox stop --provider " + config.crabboxProvider + " --id " + slug + "\n");
+        if (exitCode === 0) exitCode = EXIT_INFRA;
+      }
     }
     rmSync(lockFile, { force: true });
     rmSync(stage, { recursive: true, force: true });
