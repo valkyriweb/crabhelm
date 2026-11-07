@@ -198,7 +198,8 @@ export async function buildAppliance({ config, pins, harness, crabbox, log = pro
     const script = buildScript(pins, harness, "/tmp/agentrun-build-" + key, staged);
     const out = createWriteStream(partial, { mode: 0o600 });
     const packer = spawn("tar", ["-cf", "-", "-C", stage, "node.tgz", "app", "tarballs"], { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
-    const packed = new Promise((resolve) => packer.on("close", resolve));
+    // A spawn failure must reach the finally block (which stops the lease), not crash the process.
+    const packed = new Promise((resolve) => { packer.on("error", () => resolve(-1)); packer.on("close", resolve); });
     const result = await runner("ssh", sshCommand(base, { remote: "bash -c " + quote(script) }), {
       input: packer.stdout, stdout: out, stderr: log,
     });
