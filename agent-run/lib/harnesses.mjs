@@ -180,11 +180,10 @@ const openclaw = {
   name: "openclaw",
   bin: "openclaw",
   localArgv({ model, thinking, prompt, runId }) {
-    if (model) openclawModel(model);
     return [
       "openclaw", "agent", "--local", "--agent", "main", "--session-id", runId,
       "--message", prompt,
-      ...(model ? ["--model", model] : []),
+      ...(model ? ["--model", openclawModel(model).qualified] : []),
       ...(thinking ? ["--thinking", thinking] : []),
       "--timeout", "840", "--json",
     ];

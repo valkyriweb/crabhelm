@@ -281,7 +281,7 @@ test("OpenClaw maps allowed models to OpenAI or Anthropic and isolates state", (
   assert.deepEqual(openaiConfig.models.providers.openai.apiKey, { source: "env", provider: "default", id: "OPENAI_API_KEY" });
   assert.deepEqual(HARNESSES.openclaw.keyEnv({ model: "openai/gpt-6-sol" }), ["OPENAI_API_KEY"]);
   const localArgv = HARNESSES.openclaw.localArgv({ model: "clawrouter/gpt-6-sol", prompt: "hi", runId: "local-1" });
-  assert.deepEqual(localArgv.slice(localArgv.indexOf("--model"), localArgv.indexOf("--model") + 2), ["--model", "clawrouter/gpt-6-sol"]);
+  assert.deepEqual(localArgv.slice(localArgv.indexOf("--model"), localArgv.indexOf("--model") + 2), ["--model", "openai/gpt-6-sol"]);
 
   const anthropic = HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/claude-sonnet-4.6" });
   const anthropicConfig = JSON.parse(anthropic["openclaw/openclaw.json"]);
