@@ -192,7 +192,7 @@ const openclaw = {
     const selected = openclawModel(model);
     const url = new URL(remoteBaseUrl);
     const baseUrl = selected.provider === "openai" ? new URL("/v1", url).origin + "/v1" : url.origin;
-    const api = selected.provider === "openai" ? "openai-completions" : "anthropic-messages";
+    const api = selected.provider === "openai" ? "openai-responses" : "anthropic-messages";
     return {
       "openclaw/openclaw.json": JSON.stringify({
         gateway: { mode: "local" },
