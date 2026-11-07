@@ -15,7 +15,7 @@ import { agentRun, EXIT_INFRA, placement, sweep } from "../lib/run.mjs";
 
 const USAGE = [
   "usage:",
-  "  agent-run --harness <name> --prompt-file F [--model M] [--thinking T] [--attach FILE]... [--out DIR] [--placement auto|local|remote] [--placement-decision FILE]",
+  "  agent-run --harness <name> --prompt-file F [--model M] [--thinking T] [--attach FILE]... [--out DIR] [--placement auto|local|remote] [--placement-decision FILE] [--pi-context-file FILE]",
   "  agent-run place --harness <name> [--run-id ID]",
   "  agent-run appliance build <harness>",
   "  agent-run sweep",
@@ -89,6 +89,7 @@ async function main(argv) {
       out: { type: "string" },
       placement: { type: "string", default: "auto" },
       "placement-decision": { type: "string" },
+      "pi-context-file": { type: "string" },
       help: { type: "boolean", short: "h" },
     },
   });
@@ -100,7 +101,7 @@ async function main(argv) {
   return agentRun({
     harness: values.harness, model: values.model, thinking: values.thinking,
     promptFile: values["prompt-file"], attach: values.attach, out: values.out, placement: values.placement,
-    placementDecision: values["placement-decision"],
+    placementDecision: values["placement-decision"], piContextFile: values["pi-context-file"],
   }, { config });
 }
 

@@ -18,7 +18,7 @@ const pi = {
     ];
   },
   // Files written into the run's config dir on the box.
-  remoteConfig({ config, remoteBaseUrl }) {
+  remoteConfig({ config, remoteBaseUrl, piContext }) {
     const models = JSON.parse(readFileSync(config.piModelsFile, "utf8"));
     const source = models?.providers?.[config.piProvider];
     if (!source) throw new Error("Pi models file has no " + config.piProvider + " provider");
@@ -42,6 +42,11 @@ const pi = {
     return {
       "pi/models.json": JSON.stringify({ providers: { [config.piProvider]: provider } }, null, 2) + "\n",
       "pi/settings.json": JSON.stringify(settings, null, 2) + "\n",
+      ...(piContext ? {
+        "pi/context.json": JSON.stringify(piContext) + "\n",
+        "pi/pi-context.mjs": readFileSync(new URL("./pi-context.mjs", import.meta.url), "utf8"),
+        "pi/pi-context-turn.mjs": readFileSync(new URL("./pi-context-turn.mjs", import.meta.url), "utf8"),
+      } : {}),
     };
   },
   remoteEnv({ configDir }) {
@@ -51,8 +56,14 @@ const pi = {
       PI_TELEMETRY: "0",
     };
   },
-  remoteArgv({ config, model, thinking, sessionDir }) {
+  remoteArgv({ config, model, thinking, sessionDir, workdir, piContext }) {
     const qualified = model && !model.includes("/") ? config.piProvider + "/" + model : model;
+    if (piContext) return [
+      "node", workdir + "/config/pi/pi-context-turn.mjs",
+      workdir + "/appl/app/node_modules/@earendil-works/pi-coding-agent",
+      workdir + "/config/pi", workdir + "/config/pi/context.json",
+      workdir + "/inputs/prompt.md", sessionDir, qualified, thinking ?? "",
+    ];
     return [
       "pi", "-p", "--session-dir", sessionDir, "--no-extensions", "--no-mcp",
       ...(qualified ? ["--model", qualified] : []),
