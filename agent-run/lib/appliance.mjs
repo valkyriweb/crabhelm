@@ -77,7 +77,7 @@ export function boxPackages(lock) {
     .filter(([, entry]) => allows(entry.os, TARGET.os) && allows(entry.cpu, TARGET.cpu) && allows(entry.libc, TARGET.libc))
     .map(([path, entry]) => {
       if (!entry.resolved || !entry.integrity) throw new Error("lockfile entry " + path + " has no resolved URL or integrity");
-      return { path, resolved: entry.resolved, integrity: entry.integrity };
+      return { path, resolved: entry.resolved, integrity: entry.integrity, installScript: Boolean(entry.hasInstallScript) };
     });
 }
 
@@ -122,7 +122,7 @@ async function stageInputs({ config, pins, harness, node, runner, log }) {
   };
   await Promise.all(Array.from({ length: 6 }, worker));
   copyFileSync(node, join(stage, "node.tgz"));
-  return { stage, lockSha256: createHash("sha256").update(readFileSync(join(stage, "app", "package-lock.json"))).digest("hex") };
+  return { stage, installScripts: packages.filter((p) => p.installScript).map((p) => p.path), lockSha256: createHash("sha256").update(readFileSync(join(stage, "app", "package-lock.json"))).digest("hex") };
 }
 
 export function buildScript(pins, harness, workdir, { lockSha256 } = {}) {
@@ -150,7 +150,28 @@ export function buildScript(pins, harness, workdir, { lockSha256 } = {}) {
   ].join("\n");
 }
 
-// Build one harness appliance on a Crabbox lease and cache it locally.
+// With no install scripts, npm only unpacks verified tarballs, so the
+// laptop can assemble the linux-x64 tree itself (npm --os/--cpu/--libc pick
+// the box's optional packages). This avoids a slow round trip through a
+// lease. Node stays packed as node.tgz; the box unpacks it per run.
+async function assembleLocally({ stage, pins, harness, lockSha256, partial, runner }) {
+  const spec = pins.harnesses[harness];
+  const cache = join(stage, "npm-cache");
+  const tarballs = (await runner("ls", [join(stage, "tarballs")])).stdout.trim().split("\n").map((name) => join(stage, "tarballs", name));
+  const npm = (args) => runner("npm", [...args, "--cache", cache, "--no-audit", "--no-fund"], { cwd: join(stage, "app") });
+  const added = await npm(["cache", "add", ...tarballs]);
+  if (added.code !== 0) throw new Error("npm cache add failed: " + added.stderr.trim().split("\n").at(-1));
+  const installed = await npm(["ci", "--offline", "--omit=dev", "--ignore-scripts", "--os=linux", "--cpu=x64", "--libc=glibc"]);
+  if (installed.code !== 0) throw new Error("npm ci failed: " + installed.stderr.trim().split("\n").at(-1));
+  if (!existsSync(join(stage, "app", "node_modules", ".bin", spec.bin))) throw new Error("npm ci did not install " + spec.bin);
+  writeFileSync(join(stage, "agent-run-appliance.json"), JSON.stringify({ harness, package: spec.package, version: spec.version, bin: spec.bin, node: pins.node.version, lockSha256, assembled: "laptop" }) + "\n");
+  rmSync(cache, { recursive: true, force: true });
+  const packed = await runner("tar", ["-czf", partial, "-C", stage, "node.tgz", "app", "agent-run-appliance.json"], { env: { ...process.env, COPYFILE_DISABLE: "1" } });
+  if (packed.code !== 0) throw new Error("could not pack the appliance");
+}
+
+// Build one harness appliance and cache it locally: on the laptop when no
+// package has install scripts, otherwise on a Crabbox lease.
 export async function buildAppliance({ config, pins, harness, crabbox, log = process.stderr, runner = run }) {
   const key = applianceKey(pins, harness);
   const node = await nodeTarball(config, pins, log);
@@ -164,6 +185,12 @@ export async function buildAppliance({ config, pins, harness, crabbox, log = pro
   try {
     const staged = await stageInputs({ config, pins, harness, node, runner, log });
     stage = staged.stage;
+    if (staged.installScripts.length === 0) {
+      log.write("agent-run: no install scripts; assembling the linux-x64 appliance on the laptop\n");
+      await assembleLocally({ stage, pins, harness, lockSha256: staged.lockSha256, partial, runner });
+      return await finish(staged, "laptop");
+    }
+    log.write("agent-run: install scripts in " + staged.installScripts.join(", ") + "; building on a lease\n");
     leaseRequested = true;
     const leased = await crabbox.warmup(slug, log);
     lease.leaseId = leased.leaseId;
@@ -178,14 +205,7 @@ export async function buildAppliance({ config, pins, harness, crabbox, log = pro
     await new Promise((resolve) => out.end(resolve));
     if (await packed !== 0) throw new Error("could not stream the build inputs");
     if (result.code !== 0) throw new Error("appliance build failed on the lease (exit " + result.code + ")");
-    const sha256 = await sha256File(partial);
-    const path = join(dir, key + "-" + sha256.slice(0, 12) + ".tgz");
-    renameSync(partial, path);
-    const index = readIndex(config);
-    index[key] = { path, sha256, harness, package: pins.harnesses[harness].package, version: pins.harnesses[harness].version, node: pins.node.version, lockSha256: staged.lockSha256, builtAt: new Date().toISOString(), buildLease: lease.leaseId };
-    writeFileSync(indexPath(config), JSON.stringify(index, null, 2) + "\n", { mode: 0o600 });
-    log.write("agent-run: appliance " + key + " sha256=" + sha256 + "\n");
-    return { ...index[key], key };
+    return await finish(staged, lease.leaseId);
   } finally {
     rmSync(partial, { force: true });
     if (stage) rmSync(stage, { recursive: true, force: true });
@@ -193,6 +213,17 @@ export async function buildAppliance({ config, pins, harness, crabbox, log = pro
       const stop = await crabbox.stop(slug).catch((error) => ({ stopped: false, error: String(error) }));
       log.write("agent-run: build lease cleanup stopped=" + stop.stopped + " slug=" + slug + "\n");
     }
+  }
+
+  async function finish(staged, builtOn) {
+    const sha256 = await sha256File(partial);
+    const path = join(dir, key + "-" + sha256.slice(0, 12) + ".tgz");
+    renameSync(partial, path);
+    const index = readIndex(config);
+    index[key] = { path, sha256, harness, package: pins.harnesses[harness].package, version: pins.harnesses[harness].version, node: pins.node.version, lockSha256: staged.lockSha256, builtAt: new Date().toISOString(), builtOn };
+    writeFileSync(indexPath(config), JSON.stringify(index, null, 2) + "\n", { mode: 0o600 });
+    log.write("agent-run: appliance " + key + " sha256=" + sha256 + "\n");
+    return { ...index[key], key };
   }
 }
 

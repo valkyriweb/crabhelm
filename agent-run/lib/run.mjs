@@ -176,7 +176,9 @@ export async function agentRun(options, deps = {}) {
     const install = await runner("ssh", sshCommand(base, {
       remote: "set -e; mkdir -p " + quote(workdir + "/appl") + "; cat > " + quote(workdir + "/appl.tgz") +
         "; echo " + quote(appliance.sha256 + "  " + workdir + "/appl.tgz") + " | sha256sum -c - >/dev/null" +
-        "; tar -xzf " + quote(workdir + "/appl.tgz") + " -C " + quote(workdir + "/appl") + "; rm " + quote(workdir + "/appl.tgz"),
+        "; tar -xzf " + quote(workdir + "/appl.tgz") + " -C " + quote(workdir + "/appl") + "; rm " + quote(workdir + "/appl.tgz") +
+        // Laptop-assembled appliances keep Node packed; it was sha256-checked when the appliance was built.
+        "; if [ -f " + quote(workdir + "/appl/node.tgz") + " ]; then mkdir -p " + quote(workdir + "/appl/node") + "; tar -xzf " + quote(workdir + "/appl/node.tgz") + " -C " + quote(workdir + "/appl/node") + " --strip-components=1; rm " + quote(workdir + "/appl/node.tgz") + "; fi",
     }), { input: createReadStream(appliance.path), onSpawn: step });
     if (install.code !== 0) throw new Error("appliance upload or sha256 check failed (exit " + install.code + ")");
     receipt.appliance.verifiedOnBox = true;

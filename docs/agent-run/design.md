@@ -53,9 +53,10 @@ Each harness has one pinned, content-addressed tarball: Node linux-x64 (SHASUMS-
 `agent-run appliance build <h>` works in two parts:
 
 1. The laptop resolves the npm lockfile (registry metadata only), downloads the linux-x64 glibc tarballs it lists, and checks each one against its lockfile integrity.
-2. A Crabbox lease receives those tarballs over SSH and runs `npm ci --offline`, so install scripts and extraction stay off the laptop.
+2. If no locked package has an install script, the laptop assembles the tree itself: `npm ci --offline --ignore-scripts --os=linux --cpu=x64 --libc=glibc`. Node stays packed as `node.tgz`, and the box unpacks it per run. The codex appliance took 45 seconds this way.
+3. Otherwise a Crabbox lease receives the tarballs over SSH and runs `npm ci --offline`, so install scripts run on Linux and stay off the laptop. Pi takes this path (`@google/genai`, `protobufjs`).
 
-The laptop downloads because broker boxes reach the npm registry at only 6-47 KB/s (measured 2026-11-07); the first Pi build, which downloaded on the box, took about 20 minutes. The result is stored under `~/.cache/agent-run/appliances/<h>-<version>-<sha12>.tgz`, and the index records the tarball sha256 and the lockfile sha256.
+The laptop downloads because broker boxes reach the npm registry at only 6-47 KB/s (measured 2026-11-07); the first Pi build, which downloaded on the box, took about 20 minutes. Fleet confirmed this is a lease-network defect on all three lue-kube donors (`receipts/lease-egress-slow.md`). The same donors carry the SSH relay at about 290 KB/s up and 175 KB/s down, so a 229 MB codex appliance takes about 13 minutes to upload per run until Fleet fixes it. The result is stored under `~/.cache/agent-run/appliances/<h>-<version>-<sha12>.tgz`, and the index records the tarball sha256 and the lockfile sha256.
 Each run streams the cached tarball over SSH; the box checks the sha256 before it unpacks it. Nothing is downloaded or installed on the box per run.
 
 | Harness | Box config written per run (key only from env) |
