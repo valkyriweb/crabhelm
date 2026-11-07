@@ -27,6 +27,18 @@
       "version": "2026.7.1",
       "bin": "openclaw"
     },
+    "grok": {
+      "package": "grok",
+      "version": "1.0.78",
+      "bin": "grok",
+      "platform": "linux-x64",
+      "artifact": {
+        "url": "https://x.ai/cli/grok-1.0.78-linux-x86_64",
+        "format": "binary",
+        "source": "xai-cli",
+        "sha256": "8e59eb3e32ef1a185de8ec5ebed7b64d30986abd5e20923d1695accca6e0645b"
+      }
+    },
     "rusty": {
       "package": "rustyd",
       "version": "0.1.5",

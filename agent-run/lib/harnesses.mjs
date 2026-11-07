@@ -117,6 +117,58 @@ const codex = {
 // Pi thinking levels mapped to Claude Code --effort values (Claude has no "off").
 const CLAUDE_EFFORT = { off: "low", minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "max" };
 
+function grokModel(model) {
+  const id = (model ?? "grok-4.7").replace(/^clawrouter\/(?:xai\/)?/, "").replace(/^xai\//, "");
+  if (!/^grok-[a-z0-9.-]+$/i.test(id)) throw new Error("grok: model must be a Grok model");
+  return id;
+}
+
+const GROK_EFFORT = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function grokEffortArgs(thinking) {
+  if (!thinking || thinking === "off") return [];
+  if (!GROK_EFFORT.has(thinking)) throw new Error("grok: unknown thinking level " + thinking);
+  return ["--reasoning-effort", thinking];
+}
+
+const grok = {
+  name: "grok",
+  bin: "grok",
+  localArgv({ model, thinking, prompt }) {
+    return ["grok", "--single", prompt,
+      ...(model ? ["--model", grokModel(model)] : []), ...grokEffortArgs(thinking)];
+  },
+  remoteConfig({ remoteBaseUrl, model }) {
+    return {
+      "grok/home/.grok/config.toml": [
+        "[cli]", "auto_update = false", "",
+        "[features]", "telemetry = false", "",
+        "[model.agent-run]",
+        "model = " + JSON.stringify("xai/" + grokModel(model)),
+        "base_url = " + JSON.stringify(new URL(remoteBaseUrl).origin + "/v1"),
+        "name = \"Grok (agent-run)\"",
+        "env_key = \"XAI_API_KEY\"",
+        "api_backend = \"chat_completions\"",
+        "context_window = 200000", "",
+      ].join("\n"),
+    };
+  },
+  remoteEnv({ configDir }) {
+    const home = configDir + "/grok/home";
+    return { HOME: home, GROK_HOME: home + "/.grok", GROK_DISABLE_AUTOUPDATER: "1" };
+  },
+  keyEnv: ["XAI_API_KEY"],
+  remoteArgv({ model, thinking, promptFile }) {
+    grokModel(model);
+    return ["grok", "--prompt-file", promptFile, "--model", "agent-run", "--permission-mode", "bypassPermissions",
+      ...grokEffortArgs(thinking)];
+  },
+  remoteCollect({ configDir, sessionDir }) {
+    const sessions = configDir + "/grok/home/.grok/sessions";
+    return ["if [ -d " + quote(sessions) + " ]; then cp -R " + quote(sessions) + " " + quote(sessionDir + "/grok-sessions") + "; fi"];
+  },
+};
+
 function claudeArgs({ model, thinking }) {
   if (thinking && !CLAUDE_EFFORT[thinking]) throw new Error("claude: unknown thinking level " + thinking);
   return [
@@ -306,8 +358,8 @@ const openclaw = {
   },
 };
 
-export const HARNESSES = { pi, codex, claude, openclaw, rusty };
-export const PLANNED = ["prime", "grok"];
+export const HARNESSES = { pi, codex, claude, openclaw, rusty, grok };
+export const PLANNED = ["prime"];
 
 export function harness(name) {
   const adapter = HARNESSES[name];

@@ -49,7 +49,7 @@ No infrastructure change, no Access token and no tailnet key reach the box. The 
 
 ## Harness appliances
 
-Each npm harness has one pinned, content-addressed tarball: Node linux-x64 (SHASUMS-verified) plus the harness package at an exact version with its lockfile. Rusty instead uses a pinned Linux x86_64 release artifact. agent-run downloads private assets through authenticated gh release download with prompts disabled, verifies the SHA-256, and packages only the rustyd binary and manifest. GitHub credentials stay on the laptop.
+Each npm harness has one pinned, content-addressed tarball: Node linux-x64 (SHASUMS-verified) plus the harness package at an exact version with its lockfile. Rusty uses a pinned Linux x86_64 release artifact downloaded through authenticated `gh release download`. Grok uses the official xAI CLI installer artifact for Linux x86_64, pinned by version and SHA-256. Both binary appliances package only the executable and manifest; credentials stay on the laptop.
 `agent-run appliance build <h>` works in two parts:
 
 1. The laptop resolves the npm lockfile (registry metadata only), downloads the linux-x64 glibc tarballs it lists, and checks each one against its lockfile integrity.
@@ -65,9 +65,10 @@ Each run streams the cached tarball over SSH; the box checks the sha256 before i
 | codex | fresh `CODEX_HOME` with `config.toml`: `model_provider clawrouter`, `base_url http://127.0.0.1:18789/v1`, `env_key CLAWROUTER_API_KEY`, `wire_api responses`; `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox` (the lease is a disposable container; Codex's own sandbox needs Landlock and seccomp, which rootless broker containers do not reliably provide). The rollout under `$CODEX_HOME/sessions` and the last message are copied back. |
 | claude | `CLAUDE_CONFIG_DIR` per run, `ANTHROPIC_BASE_URL http://127.0.0.1:18789`, `ANTHROPIC_API_KEY` set from `CLAWROUTER_API_KEY` (sent as `x-api-key`, which ClawRouter accepts); `claude -p --bare --dangerously-skip-permissions`, prompt on stdin. The pin sets `ignoreScripts` and `entry`: the postinstall only copies the native binary over a stub, so the laptop links `bin/claude` to that binary instead. Project transcripts are copied back. |
 | rusty | Pinned rustyd 0.1.5 Linux x86_64 release artifact; rustyd print uses the Responses transport through the forwarded ClawRouter endpoint, an env-backed per-run OPENAI_API_KEY, and an isolated no-tools profile; session JSONL is returned under --out/session. |
-| grok, prime-agent | per-slice: each slice records the exact base-URL and key settings it needs |
+| grok | Pinned Grok CLI 1.0.78 Linux x86_64 binary; isolated `GROK_HOME`; custom model uses Chat Completions at `http://127.0.0.1:18789/v1` and env-backed `XAI_API_KEY`; session database is returned under --out/session. |
+| prime-agent | per-slice: identify and pin its Linux release artifact, then record its exact base-URL and key settings. |
 
-Open item: Grok models route as provider `xai`, which the default device policy (`openai,anthropic`) refuses. The grok slice uses Grok-family models only through providers the default policy allows, or it reports the gap.
+ClawRouter allows the `xai` provider on per-run keys under the approval recorded in PR #7 (merged SHA `97c1728257b17ea172f08405541ec887bbe2be53`). The Grok slice uses `xai/grok-4.7` through that provider.
 
 ## Receipts and exit codes
 

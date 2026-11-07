@@ -89,6 +89,33 @@ test("a pinned Linux release artifact assembles a digest-addressed appliance", a
   assert.equal(manifest.artifactSha256, digest);
 });
 
+test("a pinned Linux binary release assembles a digest-addressed appliance", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "agent-run-grok-appliance-"));
+  const bytes = Buffer.from("fake grok ELF binary\n");
+  const digest = createHash("sha256").update(bytes).digest("hex");
+  const pins = { harnesses: { grok: {
+    package: "grok", version: "1.0.78", bin: "grok", platform: "linux-x64",
+    artifact: { url: "https://releases.example/grok", format: "binary", source: "test-binary-release", sha256: digest },
+  } } };
+  const appliance = await buildAppliance({
+    config: { cacheDir: join(dir, "cache") }, pins, harness: "grok", log: sink(),
+    fetcher: async (url) => { assert.equal(url, pins.harnesses.grok.artifact.url); return new Response(bytes); },
+    runner: async (command, args, options = {}) => {
+      execFileSync(command, args, { env: options.env });
+      return { code: 0, stdout: "", stderr: "" };
+    },
+  });
+  assert.equal(appliance.key, applianceKey(pins, "grok"));
+  assert.equal(appliance.sourceSha256, digest);
+  assert.equal(appliance.builtOn, "test-binary-release");
+  const unpacked = join(dir, "unpacked");
+  mkdirSync(unpacked);
+  execFileSync("tar", ["-xzf", appliance.path, "-C", unpacked]);
+  const binary = join(unpacked, "bin", "grok");
+  assert.equal(readFileSync(binary, "utf8"), "fake grok ELF binary\n");
+  assert.ok(statSync(binary).mode & 0o111);
+});
+
 test("stopping a lease the coordinator never created counts as stopped", async () => {
   const runner = async () => ({ code: 0, stdout: "", stderr: "coordinator POST /v1/leases/s/release: http 404: {\"error\":\"not_found\"}\n" });
   assert.deepEqual(await new Crabbox({ crabboxProvider: "serve" }, { runner }).stop("s"), { stopped: true, absent: true, exitCode: 0, lease: null });
@@ -222,6 +249,8 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError, stopResul
       }
       const profile = join(args[3], "config/rusty/home/.rusty/profiles/agent-run.json");
       if (existsSync(profile)) calls.at(-1).rustyProfile = JSON.parse(readFileSync(profile, "utf8"));
+      const grokConfig = join(args[3], "config/grok/home/.grok/config.toml");
+      if (existsSync(grokConfig)) calls.at(-1).grokConfig = readFileSync(grokConfig, "utf8");
       writeFileSync(args[1], "");
     }
     if (options.input && typeof options.input.resume === "function") {
@@ -321,6 +350,30 @@ test("the Codex box config routes through the tunnel and names only the key vari
   assert.deepEqual(HARNESSES.codex.localArgv({ model: "clawrouter/gpt-x", prompt: "hi", sessionDir: "/s" }).slice(-3), ["gpt-x", "--", "hi"]);
 });
 
+test("Grok uses the xAI ClawRouter route with a per-run key and isolated profile", () => {
+  const files = HARNESSES.grok.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/xai/grok-4.7" });
+  const config = files["grok/home/.grok/config.toml"];
+  assert.match(config, /^\[model\.agent-run\]$/m);
+  assert.match(config, /^model = "xai\/grok-4\.7"$/m);
+  assert.match(config, /^base_url = "http:\/\/127\.0\.0\.1:18789\/v1"$/m);
+  assert.match(config, /^env_key = "XAI_API_KEY"$/m);
+  assert.match(config, /^api_backend = "chat_completions"$/m);
+  assert.doesNotMatch(config, /api_key\s*=/);
+  assert.deepEqual(HARNESSES.grok.keyEnv, ["XAI_API_KEY"]);
+  assert.deepEqual(HARNESSES.grok.remoteEnv({ configDir: "/w/config" }), {
+    HOME: "/w/config/grok/home", GROK_HOME: "/w/config/grok/home/.grok", GROK_DISABLE_AUTOUPDATER: "1",
+  });
+  assert.deepEqual(HARNESSES.grok.remoteArgv({ model: "xai/grok-4.7", thinking: "high", promptFile: "/w/inputs/prompt.md" }), [
+    "grok", "--prompt-file", "/w/inputs/prompt.md", "--model", "agent-run", "--permission-mode", "bypassPermissions",
+    "--reasoning-effort", "high",
+  ]);
+  assert.ok(HARNESSES.grok.remoteCollect({ configDir: "/w/config", sessionDir: "/w/out/session" })[0].includes("/grok/home/.grok/sessions"));
+  assert.throws(() => HARNESSES.grok.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/gpt-6-sol" }), /must be a Grok model/);
+  assert.deepEqual(HARNESSES.grok.localArgv({ model: "clawrouter/grok-4.7", thinking: "medium", prompt: "hi" }), [
+    "grok", "--single", "hi", "--model", "grok-4.7", "--reasoning-effort", "medium",
+  ]);
+});
+
 test("OpenClaw maps allowed models to OpenAI or Anthropic and isolates state", () => {
   const openai = HARNESSES.openclaw.remoteConfig({ remoteBaseUrl: "http://127.0.0.1:18789", model: "clawrouter/gpt-6-sol", workdir: "/w" });
   const openaiConfig = JSON.parse(openai["openclaw/openclaw.json"]);
@@ -375,6 +428,31 @@ test("OpenClaw remote run streams a single turn and collects its session", async
   assert.match(workspaceFiles["SOUL.md"], /Protect credentials and private data/);
   assert.equal(workspaceFiles["memory/.keep"], "");
   assert.equal(script.match(new RegExp(f.token, "g")).length, 1, "the per-run key is injected only once");
+  assert.deepEqual(f.events, ["mint", "warmup", "revoke", "stop"]);
+});
+
+test("Grok remote run uses the xAI key, pinned appliance, and isolated session", async () => {
+  const f = remoteFixture();
+  const digest = "8e59eb3e32ef1a185de8ec5ebed7b64d30986abd5e20923d1695accca6e0645b";
+  f.deps.pins.harnesses.grok = {
+    package: "grok", version: "1.0.78", bin: "grok", platform: "linux-x64",
+    artifact: { url: "https://x.ai/cli/grok-1.0.78-linux-x86_64", format: "binary", sha256: digest },
+  };
+  const key = applianceKey(f.deps.pins, "grok");
+  const index = join(f.deps.config.cacheDir, "appliances", "index.json");
+  const entries = JSON.parse(readFileSync(index, "utf8"));
+  writeFileSync(index, JSON.stringify({ ...entries, [key]: {
+    path: join(f.deps.config.cacheDir, "appliances/pi.tgz"),
+    sha256: createHash("sha256").update("appliance").digest("hex"), package: "grok", version: "1.0.78",
+  } }));
+  assert.equal(await agentRun({ ...f.options, harness: "grok", model: "xai/grok-4.7", thinking: "high" }, f.deps), 0);
+  const script = f.calls.find((call) => call.args.at(-1) === "bash -s").input;
+  assert.match(script, /^export XAI_API_KEY="\$CLAWROUTER_API_KEY"$/m);
+  assert.match(script, /^grok --prompt-file .* --model agent-run --permission-mode bypassPermissions --reasoning-effort high <\/dev\/null$/m);
+  assert.equal(script.match(new RegExp(f.token, "g")).length, 1, "the per-run key is injected only once");
+  const archive = f.calls.find((call) => call.command === "tar" && call.args[0] === "-czf");
+  assert.match(archive.grokConfig, /^model = "xai\/grok-4\.7"$/m);
+  assert.ok(archive.grokConfig.includes("base_url = \"http://127.0.0.1:18789/v1\""));
   assert.deepEqual(f.events, ["mint", "warmup", "revoke", "stop"]);
 });
 
