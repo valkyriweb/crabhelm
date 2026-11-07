@@ -85,8 +85,9 @@ Keys have no expiry in ClawRouter, so every agent-run first runs a sweep: it rev
 
 ## Pi Agent tool and Workflow hook
 
-The Pi subagent extension calls placement before it spawns a child Pi process. On `queue` it spawns `agent-run --harness pi` with the same prompt, model and thinking level and reads the same stdout and session file.
-That change lands in the subagent extension's own repository after the Pi slice works. Workflow children use the same spawn path.
+The my-pi subagent hook currently probes placement but keeps all children local. It does not dispatch children through the prompt-only adapter. Workflow children use the same spawn path.
+
+The opt-in [Pi child-context transport](pi-context.md) adds `--pi-context-file` for an exact effective system prompt, enforced stock tool allow-list and normalized prior history. It uses the pinned Pi SDK rather than the CLI preamble. Unsupported configurations and local placement fail closed; callers retain their existing local sessions. Remote hook enablement belongs in a separate my-pi change after this adapter merges. Reflection acceptance waits for that change to merge and be installed.
 
 ## Slices
 

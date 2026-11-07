@@ -49,8 +49,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Prepare pinned Pi SDK contract fixture
+        run: |
+          pin="$(node -p 'const p = require("./agent-run/appliances.json").harnesses.pi; p.package + "@" + p.version')"
+          npm install --prefix "$RUNNER_TEMP/pi-context-sdk" --ignore-scripts --no-audit --no-fund --package-lock=false "$pin"
+
       - name: Run full check
         env:
+          AGENT_RUN_PI_TEST_SDK: ${{ runner.temp }}/pi-context-sdk/node_modules/@earendil-works/pi-coding-agent
           # Disposable service database enables the PostgreSQL integration tests.
           CRABHELM_TEST_POSTGRES_URL: postgresql://crabhelm:crabhelm_test@localhost:5432/crabhelm_test
         run: pnpm check

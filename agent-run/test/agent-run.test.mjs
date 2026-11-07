@@ -291,6 +291,8 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError, stopResul
       if (existsSync(profile)) calls.at(-1).rustyProfile = JSON.parse(readFileSync(profile, "utf8"));
       const grokConfig = join(args[3], "config/grok/home/.grok/config.toml");
       if (existsSync(grokConfig)) calls.at(-1).grokConfig = readFileSync(grokConfig, "utf8");
+      const piContext = join(args[3], "config/pi/context.json");
+      if (existsSync(piContext)) calls.at(-1).piContextFiles = Object.fromEntries(["context.json", "pi-context.mjs", "pi-context-turn.mjs"].map((name) => [name, readFileSync(join(args[3], "config/pi", name), "utf8")]));
       const primeConfig = join(args[3], "config/prime/home/.prime/agent/models.json");
       if (existsSync(primeConfig)) calls.at(-1).primeConfig = JSON.parse(readFileSync(primeConfig, "utf8"));
       writeFileSync(args[1], "");
@@ -677,4 +679,66 @@ test("local Rusty uses an ephemeral session directory and disables relay sidecar
   assert.equal(call.env.RUSTY_NO_WORKTREE, "1");
   assert.equal(call.env.RUSTY_AGENT_RELAY, "0");
   assert.equal(call.env.RUSTY_HERDR_REPORT, "0");
+});
+
+function withPiContext(f, context = { version: 1, systemPrompt: "PRIVATE SYSTEM\n", tools: ["read"], history: [] }) {
+  const file = join(f.dir, "context.json");
+  writeFileSync(file, JSON.stringify(context));
+  f.options.piContextFile = file;
+  f.deps.pins.harnesses.pi = { package: "@earendil-works/pi-coding-agent", version: "1.5.0", bin: "pi" };
+  const index = join(f.deps.config.cacheDir, "appliances", "index.json");
+  const entries = JSON.parse(readFileSync(index, "utf8"));
+  writeFileSync(index, JSON.stringify({ ...entries, "pi-1.5.0-node24": entries["pi-1.0.0-node24"] }));
+  return context;
+}
+
+test("Pi child context is staged privately per run, never in the appliance or receipt", async () => {
+  const f = remoteFixture();
+  const context = withPiContext(f);
+  assert.equal(await agentRun(f.options, f.deps), 0);
+  const packed = f.calls.find((c) => c.piContextFiles);
+  assert.deepEqual(JSON.parse(packed.piContextFiles["context.json"]), context);
+  assert.match(packed.piContextFiles["pi-context-turn.mjs"], /tools: context.tools/);
+  assert.match(packed.piContextFiles["pi-context.mjs"], /validatePiContext/);
+  assert.equal(existsSync(packed.args[3]), false, "staging context removed after cleanup");
+  const script = f.calls.find((c) => c.args.at(-1) === "bash -s").input;
+  assert.ok(script.includes("node ") && script.includes("/config/pi/pi-context-turn.mjs"));
+  assert.ok(script.includes("/appl/app/node_modules/@earendil-works/pi-coding-agent"));
+  assert.ok(!script.includes('$(cat "$W/inputs/prompt.md")'), "current prompt travels only through its file");
+  assert.ok(!script.includes(context.systemPrompt));
+  const receipt = readFileSync(join(f.options.out, "receipt.json"), "utf8");
+  assert.ok(!receipt.includes("PRIVATE SYSTEM"));
+  assert.deepEqual(JSON.parse(receipt).piContext, { version: 1, sdkVersion: "1.5.0", tools: ["read"], historyMessages: 0 });
+  assert.deepEqual(f.events, ["mint", "warmup", "revoke", "stop"]);
+});
+
+test("invalid Pi context fails before placement, mint, lease or child execution", async () => {
+  for (const mutation of [{ tools: ["codemode"] }, { history: [{ role: "system", content: "policy", timestamp: 1 }] }, { tools: undefined }]) {
+    const f = remoteFixture();
+    withPiContext(f, { version: 1, systemPrompt: "", tools: [], history: [], ...mutation });
+    f.deps.placement = async () => assert.fail("placement must not run");
+    await assert.rejects(() => agentRun(f.options, f.deps), /invalid --pi-context-file/);
+    assert.deepEqual(f.events, []);
+    assert.deepEqual(f.calls, []);
+  }
+});
+
+test("Pi context rejects local placement, other harnesses, missing model and unsupported SDK pins", async () => {
+  const local = remoteFixture();
+  withPiContext(local);
+  local.deps.placement = async () => ({ placement: "local" });
+  await assert.rejects(() => agentRun(local.options, local.deps), /caller must keep the existing local session/);
+  assert.deepEqual(local.calls, []);
+  assert.deepEqual(local.events, []);
+  for (const mutation of [{ harness: "grok" }, { model: undefined }, { thinking: "invented" }]) {
+    const f = remoteFixture();
+    withPiContext(f);
+    await assert.rejects(() => agentRun({ ...f.options, ...mutation }, f.deps));
+    assert.deepEqual(f.events, []);
+  }
+  const wrongPin = remoteFixture();
+  withPiContext(wrongPin);
+  wrongPin.deps.pins.harnesses.pi.version = "1.4.0";
+  await assert.rejects(() => agentRun(wrongPin.options, wrongPin.deps), /pinned Pi SDK appliance/);
+  assert.deepEqual(wrongPin.events, []);
 });

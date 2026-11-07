@@ -9,6 +9,7 @@ import { ensureAppliance, loadPins } from "./appliance.mjs";
 import { harness as harnessAdapter } from "./harnesses.mjs";
 import { childEnv, run } from "./proc.mjs";
 import { quote } from "./shell.mjs";
+import { PI_CONTEXT_VERSION, readPiContext } from "./pi-context.mjs";
 
 export const EXIT_QUEUED = 75;
 export const EXIT_INFRA = 3;
@@ -99,6 +100,11 @@ export async function agentRun(options, deps = {}) {
   const stdout = deps.stdout ?? process.stdout;
   const runner = deps.runner ?? run;
   const adapter = harnessAdapter(options.harness);
+  const hasPiContext = options.piContextFile !== undefined;
+  if (hasPiContext && adapter.name !== "pi") throw new Error("--pi-context-file requires --harness pi");
+  const piContext = hasPiContext ? readPiContext(options.piContextFile) : undefined;
+  if (piContext && !options.model) throw new Error("--pi-context-file requires --model; no default model is inferred");
+  if (piContext && options.thinking && !["off", "minimal", "low", "medium", "high", "xhigh"].includes(options.thinking)) throw new Error("Pi context transport received an unsupported thinking level");
   const runId = newKeyName();
   const out = resolve(options.out ?? join(process.cwd(), "agent-run-" + runId));
   mkdirSync(join(out, "session"), { recursive: true });
@@ -116,6 +122,7 @@ export async function agentRun(options, deps = {}) {
   log.write("agent-run: placement=" + decision.placement + (decision.reason ? " (" + decision.reason + ")" : "") + "\n");
 
   if (decision.placement === "local") {
+    if (piContext) throw new Error("Pi child context requires remote placement; caller must keep the existing local session");
     const argv = adapter.localArgv({ model: options.model, thinking: options.thinking, prompt, sessionDir: join(out, "session"), runId });
     const output = tee(join(out, "stdout.txt"), stdout);
     const result = await runner(argv[0], argv.slice(1), { input: adapter.promptOnStdin ? prompt : undefined, stdout: output.stream, stderr: "inherit", env: childEnv(process.env, adapter.localEnv?.({ config, model: options.model, sessionDir: join(out, "session") }) ?? {}) });
@@ -127,10 +134,12 @@ export async function agentRun(options, deps = {}) {
     return result.code;
   }
 
+  const pins = deps.pins ?? loadPins();
+  if (piContext && (pins.harnesses.pi.version !== PI_CONTEXT_VERSION || pins.harnesses.pi.package !== "@earendil-works/pi-coding-agent")) throw new Error("Pi context transport requires the pinned Pi SDK appliance");
+  if (piContext) receipt.piContext = { version: 1, sdkVersion: PI_CONTEXT_VERSION, tools: piContext.tools, historyMessages: piContext.history.length };
   const admin = deps.admin ?? new ClawRouterAdmin(config, { runner });
   const stage = mkdtempSync(join(tmpdir(), "agent-run-"));
   const crabbox = deps.crabbox ?? new Crabbox(config, { runner, cwd: stage });
-  const pins = deps.pins ?? loadPins();
   const lockFile = join(locksDir(config), runId + ".json");
   const workdir = "/tmp/agentrun-" + runId;
   const slug = "agentrun-" + adapter.name + "-" + runId.slice(-6) + randomBytes(2).toString("hex");
@@ -180,7 +189,7 @@ export async function agentRun(options, deps = {}) {
       writeFileSync(path, content, { mode: 0o600 });
     }
     const remoteBaseUrl = "http://127.0.0.1:" + config.remotePort;
-    for (const [rel, content] of Object.entries(adapter.remoteConfig({ config, remoteBaseUrl, model: options.model, workdir }))) {
+    for (const [rel, content] of Object.entries(adapter.remoteConfig({ config, remoteBaseUrl, model: options.model, workdir, piContext }))) {
       mkdirSync(join(stage, "config", rel, ".."), { recursive: true });
       writeFileSync(join(stage, "config", rel), content, { mode: 0o600 });
     }
@@ -206,8 +215,8 @@ export async function agentRun(options, deps = {}) {
     const script = remoteRunScript({
       workdir, token: key.token,
       env: adapter.remoteEnv({ configDir: workdir + "/config", remoteBaseUrl }),
-      argv: adapter.remoteArgv({ config, model: options.model, thinking: options.thinking, sessionDir: workdir + "/out/session", runId, promptFile: workdir + "/inputs/prompt.md", remoteBaseUrl }),
-      promptAsArgument: adapter.promptAsArgument,
+      argv: adapter.remoteArgv({ config, model: options.model, thinking: options.thinking, sessionDir: workdir + "/out/session", runId, promptFile: workdir + "/inputs/prompt.md", remoteBaseUrl, workdir, piContext }),
+      promptAsArgument: adapter.promptAsArgument && !piContext,
       promptOnStdin: adapter.promptOnStdin,
       keyEnv: typeof adapter.keyEnv === "function" ? adapter.keyEnv({ model: options.model }) : adapter.keyEnv,
       collect: adapter.remoteCollect?.({ configDir: workdir + "/config", sessionDir: workdir + "/out/session" }) ?? [],
