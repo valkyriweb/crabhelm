@@ -123,12 +123,12 @@ function grokModel(model) {
   return id;
 }
 
-const GROK_EFFORT = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+const GROK_EFFORT = { minimal: "low", low: "low", medium: "medium", high: "high", xhigh: "xhigh", max: "xhigh" };
 
 function grokEffortArgs(thinking) {
   if (!thinking || thinking === "off") return [];
-  if (!GROK_EFFORT.has(thinking)) throw new Error("grok: unknown thinking level " + thinking);
-  return ["--reasoning-effort", thinking];
+  if (!Object.hasOwn(GROK_EFFORT, thinking)) throw new Error("grok: unknown thinking level " + thinking);
+  return ["--reasoning-effort", GROK_EFFORT[thinking]];
 }
 
 const grok = {

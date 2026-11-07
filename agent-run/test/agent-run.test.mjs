@@ -372,6 +372,8 @@ test("Grok uses the xAI ClawRouter route with a per-run key and isolated profile
   assert.deepEqual(HARNESSES.grok.localArgv({ model: "clawrouter/grok-4.7", thinking: "medium", prompt: "hi" }), [
     "grok", "--single", "hi", "--model", "grok-4.7", "--reasoning-effort", "medium",
   ]);
+  assert.deepEqual(HARNESSES.grok.localArgv({ thinking: "minimal", prompt: "hi" }).slice(-2), ["--reasoning-effort", "low"]);
+  assert.deepEqual(HARNESSES.grok.localArgv({ thinking: "max", prompt: "hi" }).slice(-2), ["--reasoning-effort", "xhigh"]);
 });
 
 test("OpenClaw maps allowed models to OpenAI or Anthropic and isolates state", () => {
