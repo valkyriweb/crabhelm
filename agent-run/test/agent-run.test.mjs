@@ -7,7 +7,7 @@ import { Writable } from "node:stream";
 import { test } from "node:test";
 import { boxPackages, integrityMatches } from "../lib/appliance.mjs";
 import { ClawRouterAdmin, IN_POD_SCRIPT, newKeyName } from "../lib/clawrouter.mjs";
-import { sshCommand } from "../lib/crabbox.mjs";
+import { Crabbox, sshCommand } from "../lib/crabbox.mjs";
 import { childEnv } from "../lib/proc.mjs";
 import { HARNESSES } from "../lib/harnesses.mjs";
 import { agentRun, EXIT_INFRA, EXIT_QUEUED } from "../lib/run.mjs";
@@ -46,6 +46,13 @@ test("tarball integrity is checked against the lockfile hash", () => {
   assert.ok(integrityMatches("sha1-ignored " + good, bytes));
   assert.ok(!integrityMatches(good, Buffer.from("other")));
   assert.ok(!integrityMatches("sha1-" + createHash("sha1").update(bytes).digest("base64"), bytes));
+});
+
+test("stopping a lease the coordinator never created counts as stopped", async () => {
+  const runner = async () => ({ code: 0, stdout: "", stderr: "coordinator POST /v1/leases/s/release: http 404: {\"error\":\"not_found\"}\n" });
+  assert.deepEqual(await new Crabbox({ crabboxProvider: "serve" }, { runner }).stop("s"), { stopped: true, absent: true, exitCode: 0, lease: null });
+  const failing = async () => ({ code: 1, stdout: "", stderr: "coordinator POST /v1/leases/s/release: http 500\n" });
+  assert.equal((await new Crabbox({ crabboxProvider: "serve" }, { runner: failing }).stop("s")).stopped, false);
 });
 
 test("sshCommand puts options before the destination", () => {

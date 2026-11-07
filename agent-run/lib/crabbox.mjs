@@ -53,6 +53,8 @@ export class Crabbox {
     const result = await this.#run("crabbox", ["stop", ...this.#providerArgs(), "--id", slug], { cwd: this.#cwd });
     const text = result.stdout + "\n" + result.stderr;
     const released = /released lease=(\S+)/.exec(text);
+    // The coordinator has no such lease (for example a warmup cancelled by a signal): nothing is left running.
+    if (!released && /\/release: http 404\b/.test(text)) return { stopped: true, absent: true, exitCode: result.code, lease: null };
     return { stopped: result.code === 0 && Boolean(released), exitCode: result.code, lease: released?.[1] ?? null };
   }
 }
