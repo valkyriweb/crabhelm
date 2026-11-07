@@ -176,6 +176,66 @@ function openclawModel(model) {
   return { provider, id, qualified: provider + "/" + id, keyEnv: provider === "anthropic" ? "ANTHROPIC_API_KEY" : "OPENAI_API_KEY" };
 }
 
+function rustyModel(model) {
+  if (!model) return "gpt-6-sol";
+  return model.startsWith("clawrouter/") ? model.slice("clawrouter/".length) : model;
+}
+
+const RUSTY_EFFORT = new Set(["minimal", "low", "medium", "high", "xhigh", "max"]);
+
+function rustyEffortArgs(thinking, flag) {
+  if (!thinking || thinking === "off") return [];
+  if (!RUSTY_EFFORT.has(thinking)) throw new Error("rusty: unknown thinking level " + thinking);
+  return [flag, thinking];
+}
+
+const rusty = {
+  name: "rusty",
+  bin: "rustyd",
+  localArgv({ model, thinking }) {
+    return [
+      "rusty", "-p", "--output-format", "text",
+      ...(model ? ["--model", rustyModel(model)] : []),
+      ...rustyEffortArgs(thinking, "--effort"),
+    ];
+  },
+  localEnv({ sessionDir }) {
+    return {
+      RUSTY_SESSION_DIR: sessionDir,
+      RUSTY_NO_WORKTREE: "1",
+      RUSTY_AGENT_RELAY: "0",
+      RUSTY_HERDR_REPORT: "0",
+    };
+  },
+  remoteConfig() {
+    return {
+      "rusty/home/.rusty/profiles/agent-run.json": JSON.stringify({
+        name: "agent-run", permissions: { allow: [], deny: ["*"] }, mcp_servers: {}, prompt: { append: [] },
+      }, null, 2) + "\n",
+    };
+  },
+  remoteEnv({ configDir }) {
+    const sessionDir = configDir + "/rusty/home/.rusty";
+    return {
+      HOME: configDir + "/rusty/home",
+      RUSTY_SESSION_DIR: sessionDir,
+      RUSTY_NO_WORKTREE: "1",
+      RUSTY_AGENT_RELAY: "0",
+      RUSTY_HERDR_REPORT: "0",
+    };
+  },
+  keyEnv: ["OPENAI_API_KEY"],
+  remoteArgv({ remoteBaseUrl, model, thinking, sessionDir }) {
+    return [
+      "rustyd", "print", sessionDir + "/rusty-session.jsonl",
+      "--output-format", "text", "--provider", "responses", "--bridge", remoteBaseUrl,
+      "--model", rustyModel(model), "--profile", "agent-run",
+      ...rustyEffortArgs(thinking, "--reasoning-effort"),
+    ];
+  },
+  promptOnStdin: true,
+};
+
 const openclaw = {
   name: "openclaw",
   bin: "openclaw",
@@ -246,8 +306,8 @@ const openclaw = {
   },
 };
 
-export const HARNESSES = { pi, codex, claude, openclaw };
-export const PLANNED = ["rusty", "prime", "grok"];
+export const HARNESSES = { pi, codex, claude, openclaw, rusty };
+export const PLANNED = ["prime", "grok"];
 
 export function harness(name) {
   const adapter = HARNESSES[name];
