@@ -6,8 +6,8 @@ const NAME = /^agentrun_[A-Za-z0-9_]{4,110}$/;
 
 // Runs inside the ClawRouter pod. It reads the admin token from the pod's own
 // environment, calls the loopback admin API, and prints only non-secret
-// credential metadata. The body for "put" is the body "clawctl device add"
-// sends with no flags: the default device policy, no budget, no request cap.
+// credential metadata. The put body mirrors "clawctl device add" with the
+// approved xai provider added. It sets no budget or request cap.
 export const IN_POD_SCRIPT = String.raw`
 const [op, name, sha] = process.argv.slice(1);
 const token = process.env.CLAWROUTER_ADMIN_TOKEN;
@@ -29,7 +29,7 @@ try {
   if (op === "put") {
     if (!/^[0-9a-f]{64}$/.test(sha ?? "")) out({ ok: false, op, error: "invalid sha256" }, 2);
     await call("PUT", "/v1/admin/keys/" + name, {
-      secretSha256: sha, providers: ["openai", "anthropic"], tenantId: "default",
+      secretSha256: sha, providers: ["openai", "anthropic", "xai"], tenantId: "default",
       tokenRole: "service", retainRequestContent: false,
     });
   } else if (op === "revoke") {
