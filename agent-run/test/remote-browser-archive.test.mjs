@@ -10,7 +10,7 @@ import { remoteBrowserDependencyInventorySha256 } from "../lib/remote-browser-cl
 
 // Synthetic, inert, in-memory tar.gz fixtures built by a tiny writer; nothing is extracted or executed.
 const hash = (d) => createHash("sha256").update(d).digest("hex");
-const PY = process.env.PYTHON3 ?? "/opt/homebrew/bin/python3";
+const PY = process.env.PYTHON3 ?? "/usr/bin/python3";
 const octal = (n, w) => n.toString(8).padStart(w - 1, "0") + "\0";
 function header(name, size, type, nameBytes = Buffer.from(name)) {
   const h = Buffer.alloc(512);
