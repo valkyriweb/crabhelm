@@ -135,8 +135,17 @@ The current contract intentionally has no collector-auth header field; use an ap
 
 For pull-based fleet health, set `CRABHELM_PROMETHEUS=on` and request `GET /metrics` on the runtime host with `Authorization: Bearer <METRICS_BEARER_TOKEN>`. The Prometheus-compatible response contains aggregate lifecycle phase, Gateway readiness, route-verification, request, token, and cost numbers only. It has no per-claw labels, prompts, completions, messages, tool output, diagnostic text, or credential material.
 
-## Testing
+## agent-run (fork only)
 
+`agent-run/` runs one non-interactive harness turn (Pi, Codex, Claude and others) off the laptop. It asks Harbor capacity placement first, runs the turn on a Crabbox broker lease when the laptop is busy, and writes the session files and `receipt.json` to `--out`.
+
+```bash
+node agent-run/bin/agent-run.mjs --harness pi --prompt-file task.md --out ./out
+```
+
+Usage, exit codes and fork rules: [`AGENTS.md`](AGENTS.md). Design: [`docs/agent-run/design.md`](docs/agent-run/design.md).
+
+## Testing
 `pnpm check` runs build and type checks plus the Node, AWS adapter, and Worker test tiers. `pnpm test` runs the fast Node domain suite (`node:test`). Tests under `tests/aws/` cover AWS identity, configuration, storage, PostgreSQL state, and coordinator behavior. `pnpm test:workers` runs the Worker and both Durable Objects inside workerd via `@cloudflare/vitest-pool-workers` (`tests/workers/`), covering router host-splitting, the Access auth gate, SQLite-backed control-plane state, and the hibernatable runtime-bridge reconnect path against the real runtime.
 
 ## Safety boundaries
