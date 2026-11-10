@@ -179,8 +179,8 @@ test("key names fit ClawRouter's [A-Za-z0-9_] rule", () => {
   assert.match(newKeyName(new Date("2026-11-06T22:11:33Z"), "abc123"), /^agentrun_20261106221133_abc123$/);
 });
 
-test("the in-pod script allows xai without adding a budget", () => {
-  assert.match(IN_POD_SCRIPT, /providers: \["openai", "anthropic", "xai"\]/);
+test("the in-pod script allows xai and lyber without adding a budget", () => {
+  assert.match(IN_POD_SCRIPT, /providers: \["openai", "anthropic", "xai", "lyber"\]/);
   assert.match(IN_POD_SCRIPT, /process\.env\.CLAWROUTER_ADMIN_TOKEN/);
   assert.doesNotMatch(IN_POD_SCRIPT, /monthlyBudgetMicros|monthlyRequestLimit/);
 });

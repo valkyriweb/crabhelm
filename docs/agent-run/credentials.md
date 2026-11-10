@@ -8,7 +8,7 @@ Per-run keys need no further approval. They have no budget and no extra scope; t
 1. agent-run names the key `agentrun_<UTC yyyymmddHHMMSS>_<6 random hex>`. ClawRouter allows only `[A-Za-z0-9_]`.
 2. agent-run makes 24 random bytes on the laptop, in memory only. It sends only their SHA-256 to ClawRouter.
 3. agent-run runs a fixed Node script inside the ClawRouter pod: `kubectl --context lue-kube -n clawrouter exec deploy/clawrouter -c clawrouter -- node --input-type=module -e <script> <name> <sha256>`.
-   The script calls `PUT http://127.0.0.1:8789/v1/admin/keys/<name>` with the body `clawctl device add` uses: providers `openai,anthropic,xai`, tenant `default`, token role `service`, `retainRequestContent: false`, no budget and no request limit. Luke approved `xai` for Grok per-run keys in PR #7.
+   The script calls `PUT http://127.0.0.1:8789/v1/admin/keys/<name>` with the body `clawctl device add` uses: providers `openai,anthropic,xai,lyber`, tenant `default`, token role `service`, `retainRequestContent: false`, no budget and no request limit. Luke approved `xai` for Grok per-run keys in PR #7 and `lyber` on 10 Nov 2026 (CRAB-1).
 4. The full key `clawrouter-live-<name>-<secret>` exists only in agent-run's memory and in the harness process environment on the lease. agent-run sends it to the box on the SSH session's stdin, never on a command line, and never writes it to a file, receipt or log.
 
 ## Admin token
@@ -35,4 +35,4 @@ If either check fails, agent-run exits non-zero and prints the key name (never t
 
 - No laptop key goes to any box. The box gets only the per-run key, and only for one run.
 - The box reaches ClawRouter only through the laptop's SSH remote forward to the tailnet service; it gets no tailnet or Cloudflare Access credential.
-- The `xai` provider is enabled for per-run keys under Luke’s approval recorded in PR #7. This slice adds no other provider.
+- The `xai` provider is enabled for per-run keys under Luke’s approval recorded in PR #7. Luke approved `lyber` on 10 Nov 2026 (this change). This slice adds no other provider.
