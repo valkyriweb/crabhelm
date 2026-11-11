@@ -1,6 +1,6 @@
-// Provider-only local auth relay. Binds 127.0.0.1, forwards exactly one
-// POST /v1/chat/completions for the selected model to a fixed origin with an
-// injected host token, buffers both directions under caps, and exposes counts only.
+// Host-only inference auth: one invocation or sequential numbered child rounds.
+// Binds loopback, fixes endpoint/model, and bounds aggregate bytes for the run.
+// No donor credentials, request headers, or upstream secret headers pass through.
 import { createServer } from "node:http";
 
 const PATH = "/v1/chat/completions";
@@ -32,7 +32,15 @@ async function readCapped(stream, cap, onChunk) {
   return Buffer.concat(chunks, total);
 }
 
-export async function startProviderRelay({ origin, model, token, deadlineMs, maxRequestBytes, maxResponseBytes, forwardedPort, signal } = {}) {
+export function startProviderRelay(options) {
+  return startRelay(options, false);
+}
+
+export function startAgentProviderRelay(options) {
+  return startRelay(options, true);
+}
+
+async function startRelay({ origin, model, token, deadlineMs, maxRequestBytes, maxResponseBytes, forwardedPort, signal } = {}, numberedRounds) {
   const base = new URL(origin);
   if (base.protocol !== "http:" && base.protocol !== "https:") throw new TypeError("provider-relay: origin must be http(s)");
   if (base.username || base.password || base.pathname !== "/" || base.search || base.hash) {
@@ -54,7 +62,7 @@ export async function startProviderRelay({ origin, model, token, deadlineMs, max
   const life = new AbortController();
   const stats = {
     attempts: 0, forwarded: 0, denials: 0, upstreamFailures: 0, capDenials: 0,
-    requestBytes: 0, responseBytes: 0, active: 0,
+    requestBytes: 0, responseBytes: 0, active: 0, rounds: 0,
   };
   let closeReason = null;
   let closePromise = null;
@@ -63,6 +71,7 @@ export async function startProviderRelay({ origin, model, token, deadlineMs, max
   const sockets = new Set();
   const inflight = new Set();
   let slotTaken = false;
+  let roundBusy = false;
 
   const server = createServer();
   server.requestTimeout = 0;
@@ -84,9 +93,16 @@ export async function startProviderRelay({ origin, model, token, deadlineMs, max
 
   async function handle(req, res) {
     stats.attempts += 1;
-    // One request per run: the slot is taken by the first request, before any body is read.
-    if (slotTaken) return deny(res, 429, "round");
-    slotTaken = true;
+    // Reserve before reading a body. Numbering prevents retrying a provider
+    // invocation; cumulative byte budgets still bound the whole child run.
+    if (numberedRounds) {
+      if (roundBusy || req.headers["x-agent-run-round"] !== String(stats.rounds + 1)) return deny(res, 409, "round");
+      roundBusy = true;
+    } else {
+      if (slotTaken) return deny(res, 429, "round");
+      slotTaken = true;
+    }
+    stats.rounds += 1;
     const ac = new AbortController();
     const abort = () => ac.abort();
     life.signal.addEventListener("abort", abort, { once: true });
@@ -100,9 +116,10 @@ export async function startProviderRelay({ origin, model, token, deadlineMs, max
       if (req.url !== PATH) throw new Denied(404, "path");
       if (req.method !== "POST") throw new Denied(405, "method");
       if (mediaType(req.headers["content-type"]) !== "application/json") throw new Denied(415, "content-type");
+      if (stats.requestBytes >= maxRequestBytes || stats.responseBytes >= maxResponseBytes) throw new Denied(413, "cap");
       const declared = req.headers["content-length"];
-      if (declared !== undefined && Number(declared) > maxRequestBytes) throw new Denied(413, "cap");
-      const raw = await readCapped(req, maxRequestBytes, (n) => { stats.requestBytes += n; });
+      if (declared !== undefined && Number(declared) > maxRequestBytes - stats.requestBytes) throw new Denied(413, "cap");
+      const raw = await readCapped(req, maxRequestBytes - stats.requestBytes, (n) => { stats.requestBytes += n; });
       let parsed;
       try { parsed = JSON.parse(raw.toString("utf8")); } catch { throw new Denied(400, "json"); }
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Denied(400, "json");
@@ -121,8 +138,8 @@ export async function startProviderRelay({ origin, model, token, deadlineMs, max
         const type = mediaType(up.headers.get("content-type"));
         if (!up.ok || !ALLOWED_RESPONSE_TYPES.has(type) || !up.body) throw new Denied(502, "upstream");
         const declaredUp = up.headers.get("content-length");
-        if (!up.headers.get("content-encoding") && declaredUp !== null && Number(declaredUp) > maxResponseBytes) throw new Denied(502, "cap");
-        out = { type, body: await readCapped(up.body, maxResponseBytes, (n) => { stats.responseBytes += n; }) };
+        if (!up.headers.get("content-encoding") && declaredUp !== null && Number(declaredUp) > maxResponseBytes - stats.responseBytes) throw new Denied(502, "cap");
+        out = { type, body: await readCapped(up.body, maxResponseBytes - stats.responseBytes, (n) => { stats.responseBytes += n; }) };
         if (out.body.includes(tokenBytes)) throw new Denied(502, "upstream");
       } catch (e) {
         if (e instanceof Denied) {
@@ -142,6 +159,7 @@ export async function startProviderRelay({ origin, model, token, deadlineMs, max
       else res.destroy();
     } finally {
       stats.active -= 1;
+      roundBusy = false;
       life.signal.removeEventListener("abort", abort);
     }
   }

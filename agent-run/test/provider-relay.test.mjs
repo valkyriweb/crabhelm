@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import { test } from "node:test";
-import { startProviderRelay } from "../lib/provider-relay.mjs";
+import { startAgentProviderRelay, startProviderRelay } from "../lib/provider-relay.mjs";
 
 const TOKEN = "synthetic-token-abc123";
 const MODEL = "vendor/model-x";
@@ -43,6 +43,60 @@ function call(relay, { method = "POST", path = PATH, body, headers = {} } = {}) 
   });
 }
 const good = { model: MODEL, messages: [] };
+
+test("agent relay accepts sequential numbered rounds but never replays or skips", async () => {
+  const up = await fake(ok());
+  const relay = await startAgentProviderRelay(opts(up.origin));
+  const round = (n) => call(relay, { body: good, headers: { "x-agent-run-round": n } });
+  try {
+    assert.equal((await call(relay, { body: good })).status, 409);
+    assert.equal((await round("01")).status, 409);
+    assert.equal((await round("2")).status, 409);
+    assert.equal(relay.stats().requestBytes, 0);
+    assert.equal((await round("1")).status, 200);
+    assert.equal((await round("1")).status, 409);
+    assert.equal((await round("2")).status, 200);
+    assert.equal(relay.stats().rounds, 2);
+    assert.equal(up.seen.length, 2);
+    assert.equal(up.seen[0].headers["x-agent-run-round"], undefined);
+  } finally { await relay.close(); await up.stop(); }
+});
+
+test("agent relay budgets are cumulative across rounds, not reset per request", async () => {
+  for (const direction of ["request", "response"]) {
+    const up = await fake(ok());
+    const requestSize = Buffer.byteLength(JSON.stringify(good));
+    const relay = await startAgentProviderRelay(opts(up.origin, direction === "request" ? { maxRequestBytes: requestSize * 2 } : { maxResponseBytes: 22 }));
+    const round = (n) => call(relay, { body: good, headers: { "x-agent-run-round": String(n) } });
+    try {
+      assert.equal((await round(1)).status, 200);
+      assert.equal((await round(2)).status, 200);
+      assert.equal((await round(3)).status, 413);
+      assert.equal(up.seen.length, 2);
+      assert.equal(relay.stats().requestBytes, requestSize * 2);
+      assert.equal(relay.stats().responseBytes, 22);
+    } finally { await relay.close(); await up.stop(); }
+  }
+});
+
+test("agent relay refuses concurrent rounds without consuming the next number", async () => {
+  let release; let reached;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const ready = new Promise((resolve) => { reached = resolve; });
+  const up = await fake((_q, res) => { reached(); void gate.then(() => { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); }); });
+  const relay = await startAgentProviderRelay(opts(up.origin));
+  const round = (n) => call(relay, { body: good, headers: { "x-agent-run-round": String(n) } });
+  const first = round(1);
+  try {
+    await ready;
+    assert.equal((await round(2)).status, 409);
+    assert.equal(relay.stats().rounds, 1);
+    release();
+    assert.equal((await first).status, 200);
+    assert.equal((await round(2)).status, 200);
+    assert.equal(up.seen.length, 2);
+  } finally { release(); await relay.close(); await first.catch(() => {}); await up.stop(); }
+});
 
 test("selected model succeeds with injected auth only", async () => {
   const up = await fake(ok());
