@@ -101,7 +101,12 @@ export async function agentRun(options, deps = {}) {
   const config = deps.config;
   const log = deps.log ?? process.stderr;
   const stdout = deps.stdout ?? process.stdout;
-  const runner = deps.runner ?? run;
+  const execute = deps.runner ?? run;
+  const runner = async (command, args, options = {}) => {
+    const result = await execute(command, args, { timeoutMs: config.commandTimeoutMs, ...options });
+    if (result.timedOut) log.write("agent-run: command timed out after " + config.commandTimeoutMs + "ms: " + command + "\n");
+    return result;
+  };
   const adapter = harnessAdapter(options.harness);
   const hasPiContext = options.piContextFile !== undefined;
   if (hasPiContext && adapter.name !== "pi") throw new Error("--pi-context-file requires --harness pi");
@@ -128,7 +133,8 @@ export async function agentRun(options, deps = {}) {
     if (piContext) throw new Error("Pi child context requires remote placement; caller must keep the existing local session");
     const argv = adapter.localArgv({ model: options.model, thinking: options.thinking, prompt, sessionDir: join(out, "session"), runId });
     const output = tee(join(out, "stdout.txt"), stdout);
-    const result = await runner(argv[0], argv.slice(1), { input: adapter.promptOnStdin ? prompt : undefined, stdout: output.stream, stderr: "inherit", env: childEnv(process.env, adapter.localEnv?.({ config, model: options.model, sessionDir: join(out, "session") }) ?? {}) });
+    // Keep the foreground process group so Ctrl-C still reaches local harnesses.
+    const result = await runner(argv[0], argv.slice(1), { timeoutMs: undefined, input: adapter.promptOnStdin ? prompt : undefined, stdout: output.stream, stderr: "inherit", env: childEnv(process.env, adapter.localEnv?.({ config, model: options.model, sessionDir: join(out, "session") }) ?? {}) });
     await output.done();
     receipt.target = "local";
     receipt.exitCode = result.code;
@@ -204,15 +210,31 @@ export async function agentRun(options, deps = {}) {
     const upload = await runner("ssh", sshCommand(base, { remote: "mkdir -p " + quote(workdir) + " && tar -xzf - -C " + quote(workdir) }), { input: createReadStream(tarball), onSpawn: step });
     rmSync(tarball, { force: true });
     if (upload.code !== 0) throw new Error("input upload failed (exit " + upload.code + ")");
-    const install = await runner("ssh", sshCommand(base, {
+    const applianceBytes = statSync(appliance.path).size;
+    const uploadStarted = Date.now();
+    log.write("agent-run: appliance upload starting bytes=" + applianceBytes + (config.serveProxyCommand ? " transport=custom-serve-proxy" : " transport=crabbox") + "\n");
+    const applianceInput = createReadStream(appliance.path);
+    const progress = setInterval(() => log.write("agent-run: appliance upload bytes=" + applianceInput.bytesRead + "/" + applianceBytes + "\n"), 30_000);
+    progress.unref();
+    applianceInput.on("close", () => clearInterval(progress));
+    applianceInput.on("error", () => clearInterval(progress));
+    let install;
+    try {
+      install = await runner("ssh", sshCommand(base, {
       remote: "set -e; mkdir -p " + quote(workdir + "/appl") + "; cat > " + quote(workdir + "/appl.tgz") +
         "; echo " + quote(appliance.sha256 + "  " + workdir + "/appl.tgz") + " | sha256sum -c - >/dev/null" +
         "; tar -xzf " + quote(workdir + "/appl.tgz") + " -C " + quote(workdir + "/appl") + "; rm " + quote(workdir + "/appl.tgz") +
         // Laptop-assembled appliances keep Node packed; it was sha256-checked when the appliance was built.
         "; if [ -f " + quote(workdir + "/appl/node.tgz") + " ]; then mkdir -p " + quote(workdir + "/appl/node") + "; tar -xzf " + quote(workdir + "/appl/node.tgz") + " -C " + quote(workdir + "/appl/node") + " --strip-components=1; rm " + quote(workdir + "/appl/node.tgz") + "; fi",
-    }), { input: createReadStream(appliance.path), onSpawn: step });
+      }), { input: applianceInput, onSpawn: step });
+    } finally {
+      clearInterval(progress);
+      applianceInput.destroy();
+    }
     if (install.code !== 0) throw new Error("appliance upload or sha256 check failed (exit " + install.code + ")");
     receipt.appliance.verifiedOnBox = true;
+    receipt.appliance.upload = { bytes: applianceBytes, elapsedMs: Date.now() - uploadStarted, transport: config.serveProxyCommand ? "custom-serve-proxy" : "crabbox" };
+    log.write("agent-run: appliance upload verified sha256=" + appliance.sha256 + " elapsed_ms=" + receipt.appliance.upload.elapsedMs + "\n");
     if (interrupted) throw new Error("interrupted");
 
     const router = new URL(config.routerOrigin);

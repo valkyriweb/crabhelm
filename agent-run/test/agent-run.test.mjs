@@ -314,7 +314,7 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError, stopResul
   writeFileSync(join(dir, "prompt.md"), "say hi");
   const config = {
     cacheDir, stateDir: join(dir, "state"), piModelsFile: modelsFile, piProvider: "clawrouter",
-    routerOrigin: "http://router.example:8789", remotePort: 18789, crabboxProvider: "serve", crabboxType: "cpu2",
+    routerOrigin: "http://router.example:8789", remotePort: 18789, crabboxProvider: "serve", crabboxType: "cpu2", commandTimeoutMs: 12345,
   };
   const events = [];
   const pod = fakePod();
@@ -332,7 +332,7 @@ function remoteFixture({ runExit = 0, failUpload = false, warmupError, stopResul
   };
   const calls = [];
   const runner = async (command, args, options = {}) => {
-    calls.push({ command, args, input: typeof options.input === "string" ? options.input : undefined, env: options.env });
+    calls.push({ command, args, input: typeof options.input === "string" ? options.input : undefined, env: options.env, timeoutMs: options.timeoutMs });
     if (command === "tar" && args[0] === "-czf") {
       const inputDir = join(args[3], "inputs");
       if (existsSync(join(inputDir, "BOOTSTRAP.md"))) {
@@ -776,12 +776,20 @@ test("Claude gets the per-run key as ANTHROPIC_API_KEY, the prompt on stdin and 
   assert.equal(script.match(new RegExp(f.token, "g")).length, 1, "the key appears once, in CLAWROUTER_API_KEY");
 });
 
+test("remote commands inherit the configured timeout", async () => {
+  const f = remoteFixture();
+  assert.equal(await agentRun(f.options, f.deps), 0);
+  assert.ok(f.calls.length > 0);
+  assert.ok(f.calls.every((call) => call.timeoutMs === f.deps.config.commandTimeoutMs));
+});
+
 test("local placement runs the harness on the laptop with no key and no lease", async () => {
   const f = remoteFixture();
   f.deps.placement = async () => ({ placement: "local" });
   assert.equal(await agentRun(f.options, f.deps), 0);
   assert.deepEqual(f.events, []);
   assert.equal(f.calls[0].command, "pi");
+  assert.equal(f.calls[0].timeoutMs, undefined, "keep the local harness in the foreground process group");
   assert.deepEqual(f.calls[0].args.slice(0, 1), ["-p"]);
 });
 

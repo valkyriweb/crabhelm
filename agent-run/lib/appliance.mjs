@@ -465,12 +465,22 @@ async function buildUnlocked({ config, pins, harness, crabbox, log = process.std
     const packer = spawn("tar", ["-cf", "-", "-C", stage, "node.tgz", "app", "tarballs"], { stdio: ["ignore", "pipe", "inherit"], env: { ...process.env, COPYFILE_DISABLE: "1" } });
     // A spawn failure must reach the finally block (which stops the lease), not crash the process.
     const packed = new Promise((resolve) => { packer.on("error", () => resolve(-1)); packer.on("close", resolve); });
-    const result = await runner("ssh", sshCommand(base, { remote: "bash -c " + quote(script) }), {
-      input: packer.stdout, stdout: out, stderr: log,
-    });
-    await new Promise((resolve) => out.end(resolve));
-    if (await packed !== 0) throw new Error("could not stream the build inputs");
+    let result;
+    try {
+      result = await runner("ssh", sshCommand(base, { remote: "bash -c " + quote(script) }), {
+        input: packer.stdout, stdout: out, stderr: log,
+      });
+    } finally {
+      // A failed or timed-out SSH receiver must not leave tar blocked on its pipe.
+      if (!result || result.code !== 0) {
+        packer.stdout.destroy();
+        packer.kill("SIGKILL");
+      }
+      await new Promise((resolve) => out.end(resolve));
+    }
+    const packedCode = await packed;
     if (result.code !== 0) throw new Error("appliance build failed on the lease (exit " + result.code + ")");
+    if (packedCode !== 0) throw new Error("could not stream the build inputs");
     return await finish(staged, lease.leaseId);
   } finally {
     rmSync(partial, { force: true });

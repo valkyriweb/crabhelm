@@ -41,6 +41,33 @@ chooses a machine. Check its current fleet before allowing automatic selection.
 Pi maps `openai-codex-responses` models to `openai-responses` at the
 forwarded `/v1` endpoint. Per-run API keys are not ChatGPT OAuth JWTs.
 
+## Avoiding a slow broker relay
+
+On this fleet, the broker relay transferred a 218 MB appliance at about
+250 KB/s (roughly 14 minutes). Serve does not advertise cache-volume support;
+do not assume a disposable lease has a persistent donor cache.
+
+If the control host can SSH to an approved donor, set
+`AGENT_RUN_SERVE_PROXY_COMMAND` to a trusted byte-stream command that reaches
+that donor's SSH frontdoor. For example, use `ssh -o BatchMode=yes -W
+<donor-pod-IP>:2222 <approved-donor-host>`. Discover the current donor address
+first; do not reuse an old pod IP. This replaces only the broker relay hop.
+Both the donor and lease SSH connections retain Crabbox's pinned host-key checks
+and per-lease key. The control host's SSH credential is never copied to a lease.
+The override fails closed if Crabbox emits an unrecognized SSH command.
+
+Set `AGENT_RUN_COMMAND_TIMEOUT_MS` to bound each child command during remote
+dispatch; the default is 75 minutes, matching the existing lease idle budget.
+Local harnesses retain their foreground process group and normal Ctrl-C behavior;
+this timeout does not apply to them. A timed-out child
+process group is killed, reports exit 124, and the run still attempts cleanup.
+Appliance uploads report byte progress every 30 seconds and a verified digest
+after remote extraction. A byte count measures bytes sent, not remote verification.
+
+Do not run the dispatcher inside a monitor-owned process group that a session
+shutdown will kill. Detach the job, persist its log and completion marker, and
+monitor the marker. Killing the dispatcher itself can interrupt cleanup.
+
 ## Status and results
 
 Keep the dispatch process alive. Stdout streams to the terminal and
