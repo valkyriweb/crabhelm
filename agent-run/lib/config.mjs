@@ -17,6 +17,7 @@ export function loadConfig(env = process.env) {
     remotePort: Number(env.AGENT_RUN_REMOTE_PORT || 18789),
     crabboxProvider: env.AGENT_RUN_CRABBOX_PROVIDER || "serve",
     crabboxType: env.AGENT_RUN_CRABBOX_TYPE || "cpu2",
+    crabboxMachine: env.AGENT_RUN_CRABBOX_MACHINE || undefined,
     // On serve leases a raw ssh session closes at the lease's idle timeout
     // even while "crabbox heartbeat" refreshes it (observed 2026-11-06), so
     // the idle timeout is the run budget. agent-run stops the lease itself;

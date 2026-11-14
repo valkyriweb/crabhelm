@@ -21,11 +21,12 @@ export class Crabbox {
   async warmup(slug, log = process.stderr, { onSpawn } = {}) {
     const c = this.#config;
     const result = await this.#run("crabbox", [
-      "warmup", ...this.#providerArgs(), "--type", c.crabboxType, "--slug", slug,
+      "warmup", ...this.#providerArgs(), "--type", c.crabboxType, "--class", "standard", "--slug", slug,
+      ...(c.crabboxProvider === "serve" && c.crabboxMachine ? ["--serve-machine", c.crabboxMachine] : []),
       "--idle-timeout", c.leaseIdleTimeout, "--ttl", c.leaseTtl,
     ], { cwd: this.#cwd, stdout: "capture", stderr: "capture", onSpawn });
     const text = result.stdout + "\n" + result.stderr;
-    for (const line of text.split("\n")) if (/^(leased|ready|warmup complete|serve route|waiting)/.test(line)) log.write("agent-run: crabbox " + line + "\n");
+    for (const line of text.split("\n")) if (/^(leased|ready|warmup complete|serve route|run details|waiting)/.test(line)) log.write("agent-run: crabbox " + line + "\n");
     const leased = /leased (\S+) slug=(\S+)/.exec(text);
     if (result.code !== 0 || !leased) {
       for (const line of text.trim().split("\n").slice(-5)) log.write("agent-run: crabbox " + line + "\n");

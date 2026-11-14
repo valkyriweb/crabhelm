@@ -63,7 +63,8 @@ export async function sweep(config, admin, log = process.stderr) {
     const lockFile = join(dir, credential.credentialId + ".json");
     let lock;
     try { lock = JSON.parse(readFileSync(lockFile, "utf8")); } catch { lock = undefined; }
-    if (lock?.pid && pidAlive(lock.pid)) continue;
+    // Another dispatch host may own a key absent from this host's lock directory.
+    if (!lock?.pid || (!lock.finishedAt && pidAlive(lock.pid))) continue;
     await admin.revoke(credential.credentialId);
     rmSync(lockFile, { force: true });
     revoked.push(credential.credentialId);
@@ -80,7 +81,9 @@ function remoteRunScript({ workdir, token, env, argv, promptAsArgument, promptOn
     "set -eu",
     "W=" + quote(workdir),
     "export HOME=\"$W/home\" PATH=\"$W/appl/bin:$W/appl/node/bin:$W/appl/app/node_modules/.bin:$PATH\"",
-    "mkdir -p \"$HOME\" \"$W/out/session\"",
+    "mkdir -p \"$HOME\" \"$W/out/session\" \"$W/out/out\"",
+    "export AGENT_RUN_OUT_DIR=\"$W/out/out\"",
+    "ln -s \"$W/out/out\" \"$W/inputs/out\"",
     ...exports,
     "export CLAWROUTER_API_KEY=" + quote(token),
     ...keyEnv.map((name) => "export " + name + "=\"$CLAWROUTER_API_KEY\""),
@@ -173,6 +176,8 @@ export async function agentRun(options, deps = {}) {
     leaseRequested = true;
     const lease = await crabbox.warmup(slug, log, { onSpawn: step });
     receipt.target.leaseId = lease.leaseId;
+    receipt.target.requestedMachine = config.crabboxMachine ?? null;
+    log.write("agent-run: run details provider=" + config.crabboxProvider + " lease=" + lease.leaseId + " slug=" + slug + "\n");
     if (interrupted) throw new Error("interrupted");
     const base = await crabbox.sshArgv(slug);
 
@@ -232,17 +237,21 @@ export async function agentRun(options, deps = {}) {
     receipt.exitCode = result.code;
 
     if (interrupted) {
-      receipt.sessionDownloaded = false;
+      receipt.resultsDownloaded = receipt.sessionDownloaded = false;
     } else {
       const sessionTar = join(stage, "session.tgz");
       const sessionStream = createWriteStream(sessionTar, { mode: 0o600 });
-      const download = await runner("ssh", sshCommand(base, { remote: "tar -czf - -C " + quote(workdir + "/out/session") + " ." }), { stdout: sessionStream, onSpawn: step });
+      const download = await runner("ssh", sshCommand(base, { remote: "tar -czf - -C " + quote(workdir + "/out") + " ." }), { stdout: sessionStream, onSpawn: step });
       await new Promise((done) => sessionStream.end(done));
       if (download.code === 0) {
-        const extracted = await runner("tar", ["-xzf", sessionTar, "-C", join(out, "session")]);
-        receipt.sessionDownloaded = extracted.code === 0;
+        const extracted = await runner("tar", ["-xzf", sessionTar, "-C", out]);
+        receipt.resultsDownloaded = receipt.sessionDownloaded = extracted.code === 0;
       } else {
-        receipt.sessionDownloaded = false;
+        receipt.resultsDownloaded = receipt.sessionDownloaded = false;
+      }
+      if (!receipt.resultsDownloaded) {
+        log.write("agent-run: result download failed; remote output was not recovered\n");
+        if (exitCode === 0) exitCode = EXIT_INFRA;
       }
     }
     if (decision.placement === "queue" && decision.queueFile) {
@@ -274,7 +283,12 @@ export async function agentRun(options, deps = {}) {
         if (exitCode === 0) exitCode = EXIT_INFRA;
       }
     }
-    rmSync(lockFile, { force: true });
+    if (receipt.key?.revokeProof?.ok) {
+      rmSync(lockFile, { force: true });
+    } else if (existsSync(lockFile)) {
+      // Retain ownership after an uncertain mint or revoke so a later sweep can retry.
+      writeFileSync(lockFile, JSON.stringify({ pid: process.pid, startedAt: receipt.startedAt, finishedAt: new Date().toISOString() }) + "\n", { mode: 0o600 });
+    }
     rmSync(stage, { recursive: true, force: true });
     process.off("SIGINT", onSignal);
     process.off("SIGTERM", onSignal);
