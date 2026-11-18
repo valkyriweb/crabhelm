@@ -1,5 +1,6 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { GRANT_REF } from "./clawrouter.mjs";
 
 // Crabbox donors agent-run must never lease on. rp-kube-01 is a client
 // production host (Luke, 2026-11-16: "ban it").
@@ -11,6 +12,9 @@ export function loadConfig(env = process.env) {
   const home = env.HOME || homedir();
   const commandTimeoutMs = Number(env.AGENT_RUN_COMMAND_TIMEOUT_MS || 75 * 60 * 1000);
   if (!Number.isSafeInteger(commandTimeoutMs) || commandTimeoutMs <= 0) throw new Error("AGENT_RUN_COMMAND_TIMEOUT_MS must be a positive integer");
+  // An empty but present value is refused: a missing variable must not silently drop the restriction.
+  const openaiGrant = env.AGENT_RUN_OPENAI_GRANT;
+  if (openaiGrant !== undefined && !GRANT_REF.test(openaiGrant)) throw new Error("AGENT_RUN_OPENAI_GRANT must be a ClawRouter token reference (1-256 characters, no '/' or control characters)");
   if (BANNED_CRABBOX_MACHINES.includes(env.AGENT_RUN_CRABBOX_MACHINE)) throw new Error("AGENT_RUN_CRABBOX_MACHINE=" + env.AGENT_RUN_CRABBOX_MACHINE + " is banned: it is a client production host");
   return {
     placementHelper: env.AGENT_RUN_PLACEMENT || join(home, "Projects/personal/harbor/bin/harbor-capacity-placement.mjs"),
@@ -40,5 +44,8 @@ export function loadConfig(env = process.env) {
     stateDir: env.AGENT_RUN_STATE_DIR || join(home, ".local/state/agent-run"),
     piModelsFile: env.AGENT_RUN_PI_MODELS || join(home, ".pi/agent/models.json"),
     piProvider: env.AGENT_RUN_PI_PROVIDER || "clawrouter",
+    // Token reference of the only OpenAI grant the per-run key may bill.
+    // Unset: the key may use any eligible grant, as before.
+    openaiGrant,
   };
 }
