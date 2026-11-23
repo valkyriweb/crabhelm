@@ -67,11 +67,12 @@ test("Mac mini Pi assembly uses the arm64 Node and package pins, not the x64 cac
   const cacheDir = scratch(t);
   const node = Buffer.from("arm64 Node fixture");
   const pack = Buffer.from("npm fixture");
+  const integrity = "sha512-" + createHash("sha512").update(pack).digest("base64");
   const pins = {
     node: { version: "1", url: "https://fixture/x64", arm64: {
       url: "https://fixture/arm64", sha256: createHash("sha256").update(node).digest("hex"),
     } },
-    harnesses: { pi: { package: "pi", version: "1", bin: "pi" } },
+    harnesses: { pi: { package: "pi", version: "1", bin: "pi", lightInstallScriptPins: { "node_modules/pi-arm64": integrity } } },
   };
   const legacyKey = applianceKey(pins, "pi");
   const cached = join(cacheDir, "x64.tgz");
@@ -80,8 +81,9 @@ test("Mac mini Pi assembly uses the arm64 Node and package pins, not the x64 cac
   mkdirSync(join(cacheDir, "appliances"));
   writeFileSync(join(cacheDir, "appliances", "index.json"), JSON.stringify({ [legacyKey]: { path: cached, sha256: legacyHash } }));
   const fetched = [];
-  const result = await ensureAppliance({
+  const options = {
     config: { ...loadConfig({ AGENT_RUN_LANE_MACHINE: mini }), cacheDir }, pins, harness: "pi", log: sink,
+    crabbox: { warmup: () => assert.fail("light profile must not lease for a build") },
     fetcher: async (url) => {
       fetched.push(url);
       return new Response(url === pins.node.arm64.url ? node : pack);
@@ -89,8 +91,7 @@ test("Mac mini Pi assembly uses the arm64 Node and package pins, not the x64 cac
     runner: async (command, args, options = {}) => {
       if (command === "npm") {
         if (args[0] === "install") {
-          const pkg = (cpu) => ({ os: ["linux"], cpu: [cpu], resolved: "https://fixture/pi-" + cpu,
-            integrity: "sha512-" + createHash("sha512").update(pack).digest("base64") });
+          const pkg = (cpu) => ({ os: ["linux"], cpu: [cpu], resolved: "https://fixture/pi-" + cpu, integrity, hasInstallScript: true });
           writeFileSync(join(options.cwd, "package-lock.json"), JSON.stringify({ packages: {
             "node_modules/pi-arm64": pkg("arm64"), "node_modules/pi-x64": pkg("x64"),
           } }));
@@ -105,11 +106,15 @@ test("Mac mini Pi assembly uses the arm64 Node and package pins, not the x64 cac
       }
       return { code: 0, stdout: execFileSync(command, args, options).toString() };
     },
-  });
+  };
+  const result = await ensureAppliance(options);
   assert.equal(result.key, legacyKey + "-linux-arm64");
   assert.deepEqual(fetched, [pins.node.arm64.url, "https://fixture/pi-arm64"]);
   assert.deepEqual(execFileSync("tar", ["-xOf", result.path, "node.tgz"]), node);
   assert.equal(readFileSync(cached, "utf8"), "x64 archive");
+  await assert.rejects(buildAppliance({ ...options, pins: {
+    ...pins, harnesses: { pi: { ...pins.harnesses.pi, lightInstallScriptPins: {} } },
+  } }), /unreviewed install script.*no lease requested/);
 });
 
 test("lane-heavy passes the same sizes and strict pins to heavy", { skip: !["linux", "darwin"].includes(process.platform) }, (t) => {

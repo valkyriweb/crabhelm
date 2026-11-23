@@ -17,9 +17,10 @@ export function loadPins(path = join(here, "..", "appliances.json")) {
 
 function pinsForLane(pins, lane, harness) {
   assertLaneHarness(lane, harness);
-  if (lane?.arch !== "arm64") return pins;
+  if (!lane?.lightOnly) return pins;
+  if (lane.arch !== "arm64") return { ...pins, lightOnly: true };
   if (!pins.node.arm64 || pins.harnesses[harness]?.artifact) throw new Error("no Linux arm64 appliance pin for " + harness);
-  return { ...pins, cpu: "arm64", node: { ...pins.node, ...pins.node.arm64 } };
+  return { ...pins, lightOnly: true, cpu: "arm64", node: { ...pins.node, ...pins.node.arm64 } };
 }
 
 export async function sha256File(path) {
@@ -310,7 +311,7 @@ async function stageInputs({ config, pins, harness, node, runner, log, fetcher }
   };
   await Promise.all(Array.from({ length: 6 }, worker));
   copyFileSync(node, join(stage, "node.tgz"));
-  return { stage, installScripts: packages.filter((p) => p.installScript).map((p) => p.path), lockSha256: createHash("sha256").update(readFileSync(join(stage, "app", "package-lock.json"))).digest("hex") };
+  return { stage, installScripts: packages.filter((p) => p.installScript), lockSha256: createHash("sha256").update(readFileSync(join(stage, "app", "package-lock.json"))).digest("hex") };
 }
 
 export function buildScript(pins, harness, workdir, { lockSha256 } = {}) {
@@ -458,12 +459,18 @@ async function buildUnlocked({ config, pins, harness, crabbox, log = process.std
   try {
     const staged = await stageInputs({ config, pins, harness, node, runner, log, fetcher });
     stage = staged.stage;
-    if (staged.installScripts.length === 0 || pins.harnesses[harness].ignoreScripts) {
+    if (pins.lightOnly) {
+      // The current Pi graph's scripts are a preinstall no-op and a version
+      // warning. Fail closed on drift instead of running installs on the mini.
+      const unknown = staged.installScripts.find((p) => spec.lightInstallScriptPins?.[p.path] !== p.integrity);
+      if (unknown) throw new Error("light Pi appliance needs an unreviewed install script in " + unknown.path + "; no lease requested");
+    }
+    if (staged.installScripts.length === 0 || spec.ignoreScripts || pins.lightOnly) {
       log.write("agent-run: " + (staged.installScripts.length ? "pin skips install scripts" : "no install scripts") + "; assembling the linux-" + (pins.cpu ?? "x64") + " appliance on the control host\n");
       await assembleLocally({ stage, pins, harness, lockSha256: staged.lockSha256, partial, runner });
       return await finish(staged, "laptop");
     }
-    log.write("agent-run: install scripts in " + staged.installScripts.join(", ") + "; building on a lease\n");
+    log.write("agent-run: install scripts in " + staged.installScripts.map((p) => p.path).join(", ") + "; building on a lease\n");
     leaseRequested = true;
     const leased = await crabbox.warmup(slug, log);
     lease.leaseId = leased.leaseId;

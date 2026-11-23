@@ -115,7 +115,9 @@ with `auto`, Harbor can still choose to run locally before the lease path.
 The Mac mini is for lightweight Pi turns only. It defaults to `arm64` (Apple
 Silicon) with a distinct Linux appliance; if the broker reports `amd64` for an
 Intel Mac mini, set `AGENT_RUN_LANE_ARCH=amd64`. Do not send builds, install
-jobs, or long or parallel turns there. The single-slot limit is enforced on the
+jobs, or long or parallel turns there. A cold Pi appliance is assembled on the
+dispatch host, not in a lease on the mini; an unreviewed dependency install
+script fails the build before leasing. The single-slot limit is enforced on the
 donor with `--max-leases 1`, not by counting processes on the client.
 
 For a command lease, the wrapper calls the existing `heavy` from agent-scripts
