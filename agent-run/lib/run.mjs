@@ -9,6 +9,7 @@ import { ensureAppliance, loadPins } from "./appliance.mjs";
 import { harness as harnessAdapter } from "./harnesses.mjs";
 import { childEnv, run } from "./proc.mjs";
 import { quote } from "./shell.mjs";
+import { assertLaneHarness } from "./serve-lanes.mjs";
 import { PI_CONTEXT_VERSION, readPiContext } from "./pi-context.mjs";
 
 export const EXIT_QUEUED = 75;
@@ -200,6 +201,7 @@ export async function agentRun(options, deps = {}) {
     return result.code;
   }
 
+  assertLaneHarness(config.serveLane, adapter.name);
   const pins = deps.pins ?? loadPins();
   if (piContext && (pins.harnesses.pi.version !== PI_CONTEXT_VERSION || pins.harnesses.pi.package !== "@earendil-works/pi-coding-agent")) throw new Error("Pi context transport requires the pinned Pi SDK appliance");
   if (piContext) receipt.piContext = { version: 1, sdkVersion: PI_CONTEXT_VERSION, tools: piContext.tools, historyMessages: piContext.history.length };
@@ -222,7 +224,11 @@ export async function agentRun(options, deps = {}) {
   process.on("SIGINT", onSignal);
   process.on("SIGTERM", onSignal);
   const step = (child) => { active = child; };
-  receipt.target = { provider: config.crabboxProvider, type: config.crabboxType, slug };
+  receipt.target = { provider: config.crabboxProvider, type: config.crabboxType, slug, requestedMachine: config.crabboxMachine ?? null };
+  if (config.serveLane) {
+    receipt.target.hcMachine = config.serveLane.machine;
+    receipt.target.architecture = config.serveLane.arch;
+  }
 
   try {
     receipt.swept = await sweep(config, admin, log).catch((error) => ({ error: String(error.message ?? error) }));
@@ -239,7 +245,6 @@ export async function agentRun(options, deps = {}) {
     leaseRequested = true;
     const lease = await crabbox.warmup(slug, log, { onSpawn: step });
     receipt.target.leaseId = lease.leaseId;
-    receipt.target.requestedMachine = config.crabboxMachine ?? null;
     log.write("agent-run: run details provider=" + config.crabboxProvider + " lease=" + lease.leaseId + " slug=" + slug + "\n");
     if (interrupted) throw new Error("interrupted");
     const base = await crabbox.sshArgv(slug);

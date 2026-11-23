@@ -1,6 +1,7 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { GRANT_REF } from "./clawrouter.mjs";
+import { serveLane } from "./serve-lanes.mjs";
 
 // Crabbox donors agent-run must never lease on. rp-kube-01 is a client
 // production host (Luke, 2026-11-16: "ban it").
@@ -16,6 +17,17 @@ export function loadConfig(env = process.env) {
   const openaiGrant = env.AGENT_RUN_OPENAI_GRANT;
   if (openaiGrant !== undefined && !GRANT_REF.test(openaiGrant)) throw new Error("AGENT_RUN_OPENAI_GRANT must be a ClawRouter token reference (1-256 characters, no '/' or control characters)");
   if (BANNED_CRABBOX_MACHINES.includes(env.AGENT_RUN_CRABBOX_MACHINE)) throw new Error("AGENT_RUN_CRABBOX_MACHINE=" + env.AGENT_RUN_CRABBOX_MACHINE + " is banned: it is a client production host");
+  const serveLaneProfile = serveLane(env.AGENT_RUN_LANE_MACHINE, env.AGENT_RUN_LANE_ARCH);
+  const crabboxProvider = env.AGENT_RUN_CRABBOX_PROVIDER || "serve";
+  if (serveLaneProfile) {
+    if (crabboxProvider !== "serve") throw new Error("AGENT_RUN_LANE_MACHINE requires provider serve");
+    if (env.AGENT_RUN_CRABBOX_MACHINE && env.AGENT_RUN_CRABBOX_MACHINE !== serveLaneProfile.donor) {
+      throw new Error("AGENT_RUN_CRABBOX_MACHINE conflicts with the selected Herdr lane; unset it to use the lane's broker name");
+    }
+    if (env.AGENT_RUN_CRABBOX_TYPE && env.AGENT_RUN_CRABBOX_TYPE !== serveLaneProfile.type) {
+      throw new Error("AGENT_RUN_CRABBOX_TYPE conflicts with the selected Herdr lane's " + serveLaneProfile.type + " size");
+    }
+  }
   return {
     placementHelper: env.AGENT_RUN_PLACEMENT || join(home, "Projects/personal/harbor/bin/harbor-capacity-placement.mjs"),
     kubeContext: env.AGENT_RUN_KUBE_CONTEXT || "lue-kube",
@@ -26,9 +38,10 @@ export function loadConfig(env = process.env) {
     // the SSH remote forward.
     routerOrigin: env.AGENT_RUN_ROUTER_ORIGIN || "http://clawrouter-lue.tail59faed.ts.net:8789",
     remotePort: Number(env.AGENT_RUN_REMOTE_PORT || 18789),
-    crabboxProvider: env.AGENT_RUN_CRABBOX_PROVIDER || "serve",
-    crabboxType: env.AGENT_RUN_CRABBOX_TYPE || "cpu2",
-    crabboxMachine: env.AGENT_RUN_CRABBOX_MACHINE || undefined,
+    crabboxProvider,
+    crabboxType: serveLaneProfile?.type || env.AGENT_RUN_CRABBOX_TYPE || "cpu2",
+    crabboxMachine: serveLaneProfile?.donor || env.AGENT_RUN_CRABBOX_MACHINE || undefined,
+    serveLane: serveLaneProfile,
     serveProxyCommand: env.AGENT_RUN_SERVE_PROXY_COMMAND || undefined,
     commandTimeoutMs,
     // On serve leases a raw ssh session closes at the lease's idle timeout

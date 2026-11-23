@@ -23,6 +23,7 @@ export class Crabbox {
     const result = await this.#run("crabbox", [
       "warmup", ...this.#providerArgs(), "--type", c.crabboxType, "--class", "standard", "--slug", slug,
       ...(c.crabboxProvider === "serve" && c.crabboxMachine ? ["--serve-machine", c.crabboxMachine] : []),
+      ...(c.serveLane ? ["--arch", c.serveLane.arch, "--serve-fallback="] : []),
       "--idle-timeout", c.leaseIdleTimeout, "--ttl", c.leaseTtl,
     ], { cwd: this.#cwd, stdout: "capture", stderr: "capture", onSpawn });
     const text = result.stdout + "\n" + result.stderr;

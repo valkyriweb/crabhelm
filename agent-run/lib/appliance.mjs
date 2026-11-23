@@ -7,11 +7,19 @@ import { fileURLToPath } from "node:url";
 import { childEnv, run } from "./proc.mjs";
 import { quote } from "./shell.mjs";
 import { sshCommand } from "./crabbox.mjs";
+import { assertLaneHarness } from "./serve-lanes.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
 export function loadPins(path = join(here, "..", "appliances.json")) {
   return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function pinsForLane(pins, lane, harness) {
+  assertLaneHarness(lane, harness);
+  if (lane?.arch !== "arm64") return pins;
+  if (!pins.node.arm64 || pins.harnesses[harness]?.artifact) throw new Error("no Linux arm64 appliance pin for " + harness);
+  return { ...pins, cpu: "arm64", node: { ...pins.node, ...pins.node.arm64 } };
 }
 
 export async function sha256File(path) {
@@ -177,7 +185,7 @@ export function applianceKey(pins, harness) {
   const spec = pins.harnesses[harness];
   if (!spec) throw new Error("no appliance pin for harness " + harness);
   if (spec.artifact) return harness + "-" + spec.version + "-" + spec.platform + "-" + spec.artifact.sha256.slice(0, 12);
-  return harness + "-" + spec.version + "-node" + pins.node.version;
+  return harness + "-" + spec.version + "-node" + pins.node.version + (pins.cpu === "arm64" ? "-linux-arm64" : "");
 }
 
 // Cached appliance for a harness, verified against the sha256 recorded when
@@ -191,13 +199,14 @@ export async function cachedAppliance(config, pins, harness) {
   return { ...entry, key };
 }
 
-async function nodeTarball(config, pins, log) {
+async function nodeTarball(config, pins, log, fetcher) {
   const dir = join(config.cacheDir, "node");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const path = join(dir, "node-v" + pins.node.version + "-linux-x64.tar.gz");
+  const platform = "linux-" + (pins.cpu ?? "x64");
+  const path = join(dir, "node-v" + pins.node.version + "-" + platform + ".tar.gz");
   if (existsSync(path) && await sha256File(path) === pins.node.sha256) return path;
-  log.write("agent-run: downloading Node " + pins.node.version + " for linux-x64\n");
-  const response = await fetch(pins.node.url);
+  log.write("agent-run: downloading Node " + pins.node.version + " for " + platform + "\n");
+  const response = await fetcher(pins.node.url);
   if (!response.ok) throw new Error("Node download failed: HTTP " + response.status);
   const bytes = Buffer.from(await response.arrayBuffer());
   const sha256 = createHash("sha256").update(bytes).digest("hex");
@@ -240,8 +249,7 @@ async function pinnedArtifact(config, spec, fetcher, runner, log) {
   }
 }
 
-// The box: linux, x64, glibc (Ubuntu). npm records os/cpu/libc for platform-specific packages.
-const TARGET = { os: "linux", cpu: "x64", libc: "glibc" };
+// The appliance target is Linux with glibc; npm records os/cpu/libc for platform-specific packages.
 
 function allows(list, value) {
   if (!list?.length) return true;
@@ -251,10 +259,10 @@ function allows(list, value) {
 }
 
 // Lockfile entries the box needs, with their pinned URL and integrity.
-export function boxPackages(lock) {
+export function boxPackages(lock, cpu = "x64") {
   return Object.entries(lock.packages ?? {})
     .filter(([path, entry]) => path !== "" && !entry.link && !entry.dev)
-    .filter(([, entry]) => allows(entry.os, TARGET.os) && allows(entry.cpu, TARGET.cpu) && allows(entry.libc, TARGET.libc))
+    .filter(([, entry]) => allows(entry.os, "linux") && allows(entry.cpu, cpu) && allows(entry.libc, "glibc"))
     .map(([path, entry]) => {
       if (!entry.resolved || !entry.integrity) throw new Error("lockfile entry " + path + " has no resolved URL or integrity");
       return { path, resolved: entry.resolved, integrity: entry.integrity, installScript: Boolean(entry.hasInstallScript) };
@@ -277,7 +285,7 @@ function appPackageJson(spec) {
 // slow (about 6 KB/s from the npm registry on 2026-11-07), while the
 // laptop-to-box SSH relay is fast. Each tarball is checked against the
 // lockfile integrity before it is used.
-async function stageInputs({ config, pins, harness, node, runner, log }) {
+async function stageInputs({ config, pins, harness, node, runner, log, fetcher }) {
   const spec = pins.harnesses[harness];
   const stage = mkdtempSync(join(config.cacheDir, "build-"));
   mkdirSync(join(stage, "app"));
@@ -286,14 +294,14 @@ async function stageInputs({ config, pins, harness, node, runner, log }) {
   const locked = await runner("npm", ["install", "--package-lock-only", "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund"], { cwd: join(stage, "app") });
   if (locked.code !== 0) throw new Error("npm could not resolve " + spec.package + "@" + spec.version + ": " + locked.stderr.trim().split("\n").at(-1));
   const lock = JSON.parse(readFileSync(join(stage, "app", "package-lock.json"), "utf8"));
-  const packages = boxPackages(lock);
-  log.write("agent-run: downloading " + packages.length + " npm tarballs for linux-x64\n");
+  const packages = boxPackages(lock, pins.cpu);
+  log.write("agent-run: downloading " + packages.length + " npm tarballs for linux-" + (pins.cpu ?? "x64") + "\n");
   let index = 0;
   const worker = async () => {
     while (index < packages.length) {
       const item = packages[index];
       const file = join(stage, "tarballs", String(index++).padStart(4, "0") + ".tgz");
-      const response = await fetch(item.resolved);
+      const response = await fetcher(item.resolved);
       if (!response.ok) throw new Error("download failed for " + item.path + ": HTTP " + response.status);
       const bytes = Buffer.from(await response.arrayBuffer());
       if (!integrityMatches(item.integrity, bytes)) throw new Error("integrity mismatch for " + item.path);
@@ -331,7 +339,7 @@ export function buildScript(pins, harness, workdir, { lockSha256 } = {}) {
 }
 
 // With no install scripts, npm only unpacks verified tarballs, so the
-// laptop can assemble the linux-x64 tree itself (npm --os/--cpu/--libc pick
+// control host can assemble the target tree itself (npm --os/--cpu/--libc pick
 // the box's optional packages). This avoids a slow round trip through a
 // lease. Node stays packed as node.tgz; the box unpacks it per run.
 async function assembleLocally({ stage, pins, harness, lockSha256, partial, runner }) {
@@ -341,7 +349,7 @@ async function assembleLocally({ stage, pins, harness, lockSha256, partial, runn
   const npm = (args) => runner("npm", [...args, "--cache", cache, "--no-audit", "--no-fund"], { cwd: join(stage, "app") });
   const added = await npm(["cache", "add", ...tarballs]);
   if (added.code !== 0) throw new Error("npm cache add failed: " + added.stderr.trim().split("\n").at(-1));
-  const installed = await npm(["ci", "--offline", "--omit=dev", "--ignore-scripts", "--os=linux", "--cpu=x64", "--libc=glibc"]);
+  const installed = await npm(["ci", "--offline", "--omit=dev", "--ignore-scripts", "--os=linux", "--cpu=" + (pins.cpu ?? "x64"), "--libc=glibc"]);
   if (installed.code !== 0) throw new Error("npm ci failed: " + installed.stderr.trim().split("\n").at(-1));
   const parts = ["node.tgz", "app", "agent-run-appliance.json"];
   if (spec.entry) {
@@ -430,16 +438,16 @@ async function buildPinnedArtifactAppliance({ config, pins, harness, log, runner
 // package has install scripts, otherwise on a Crabbox lease. Always builds;
 // waits first if another process is building the same appliance.
 export async function buildAppliance(options) {
-  const { config, pins, harness, log = process.stderr } = options;
-  if (!pins.harnesses[harness]) throw new Error("no appliance pin for harness " + harness);
-  return await withBuildLock(config, applianceKey(pins, harness), log, () => buildUnlocked(options));
+  const { config, harness, log = process.stderr } = options;
+  const pins = pinsForLane(options.pins, config.serveLane, harness);
+  return await withBuildLock(config, applianceKey(pins, harness), log, () => buildUnlocked({ ...options, pins }));
 }
 
 async function buildUnlocked({ config, pins, harness, crabbox, log = process.stderr, runner = run, fetcher = fetch }) {
   const spec = pins.harnesses[harness];
   if (spec.artifact) return await buildPinnedArtifactAppliance({ config, pins, harness, log, runner, fetcher });
   const key = applianceKey(pins, harness);
-  const node = await nodeTarball(config, pins, log);
+  const node = await nodeTarball(config, pins, log, fetcher);
   const slug = "agentrun-build-" + harness.replace(/[^a-z0-9]/g, "") + "-" + Date.now().toString(36);
   const dir = join(config.cacheDir, "appliances");
   mkdirSync(dir, { recursive: true, mode: 0o700 });
@@ -448,10 +456,10 @@ async function buildUnlocked({ config, pins, harness, crabbox, log = process.std
   let stage;
   let leaseRequested = false;
   try {
-    const staged = await stageInputs({ config, pins, harness, node, runner, log });
+    const staged = await stageInputs({ config, pins, harness, node, runner, log, fetcher });
     stage = staged.stage;
     if (staged.installScripts.length === 0 || pins.harnesses[harness].ignoreScripts) {
-      log.write("agent-run: " + (staged.installScripts.length ? "pin skips install scripts" : "no install scripts") + "; assembling the linux-x64 appliance on the laptop\n");
+      log.write("agent-run: " + (staged.installScripts.length ? "pin skips install scripts" : "no install scripts") + "; assembling the linux-" + (pins.cpu ?? "x64") + " appliance on the control host\n");
       await assembleLocally({ stage, pins, harness, lockSha256: staged.lockSha256, partial, runner });
       return await finish(staged, "laptop");
     }
@@ -506,9 +514,10 @@ async function buildUnlocked({ config, pins, harness, crabbox, log = process.std
 // one appliance share one build: the others wait for the build lock, then
 // find the finished appliance in the cache.
 export async function ensureAppliance(options) {
-  const { config, pins, harness, log = process.stderr } = options;
+  const { config, harness, log = process.stderr } = options;
+  const pins = pinsForLane(options.pins, config.serveLane, harness);
   const cached = await cachedAppliance(config, pins, harness);
   if (cached) return cached;
   return await withBuildLock(config, applianceKey(pins, harness), log, async () =>
-    await cachedAppliance(config, pins, harness) ?? await buildUnlocked(options));
+    await cachedAppliance(config, pins, harness) ?? await buildUnlocked({ ...options, pins }));
 }
