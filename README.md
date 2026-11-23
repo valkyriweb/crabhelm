@@ -143,7 +143,7 @@ For pull-based fleet health, set `CRABHELM_PROMETHEUS=on` and request `GET /metr
 node agent-run/bin/agent-run.mjs --harness pi --prompt-file task.md --out ./out
 ```
 
-Usage, exit codes and fork rules: [`AGENTS.md`](AGENTS.md). Design: [`docs/agent-run/design.md`](docs/agent-run/design.md).
+Usage, exit codes and fork rules: [`AGENTS.md`](AGENTS.md). Design: [`docs/agent-run/design.md`](docs/agent-run/design.md). To donate or target a Herdr lane, see [Crabbox Serve lanes](docs/agent-run/serve-lanes.md).
 
 ## Testing
 `pnpm check` runs build and type checks plus the Node, AWS adapter, and Worker test tiers. `pnpm test` runs the fast Node domain suite (`node:test`). Tests under `tests/aws/` cover AWS identity, configuration, storage, PostgreSQL state, and coordinator behavior. `pnpm test:workers` runs the Worker and both Durable Objects inside workerd via `@cloudflare/vitest-pool-workers` (`tests/workers/`), covering router host-splitting, the Access auth gate, SQLite-backed control-plane state, and the hibernatable runtime-bridge reconnect path against the real runtime.

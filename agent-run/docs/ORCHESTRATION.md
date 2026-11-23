@@ -26,12 +26,14 @@ require Harbor on the control host.
 
 ## Dispatch
 
-Check current capacity with `crabbox serve machines`. The only approved donor
-is `lue-dl360-worker-01-donor` (the asus and worker-01 donors are retired).
+Check current capacity with `crabbox serve machines`. The existing default is
+`lue-dl360-worker-01-donor` (the old asus and worker-01 donors are retired).
 `rp-kube-01` is banned: it is a client production host (Luke, 2026-11-16).
 `loadConfig` rejects `AGENT_RUN_CRABBOX_MACHINE=rp-kube-01`, Harbor placement
 never reports it, and the crabbox user config pins unpinned serve leases with
-`serve.machine: lue-dl360-worker-01-donor`. This proof does not use the M2 Max.
+`serve.machine: lue-dl360-worker-01-donor`. For the opt-in Herdr lane names,
+fixed sizes, and operator-controlled registration, see [Crabbox Serve
+lanes](../../docs/agent-run/serve-lanes.md).
 
 ```sh
 export AGENT_RUN_CRABBOX_MACHINE=lue-dl360-worker-01-donor
@@ -142,9 +144,10 @@ before applying it. No commit, push or GitHub credential on the lease is needed.
   scheduling, a shared workspace, or a persistent agent pane.
 - Only supplied inputs reach the lease. Edits outside remote `out/` are not
   returned automatically. Remote leases are discarded after collection.
-- Linux x64 appliances are pinned. Cold builds download dependencies. The
-  first run on each machine uploads the appliance; network throughput can
-  dominate that run.
+- Linux x64 appliances are pinned, with a separate Linux arm64 Pi appliance
+  on the Apple Silicon Mac mini lane. Cold builds download dependencies.
+  The first run on each machine uploads the appliance; network throughput
+  can dominate that run.
 - Cache locking coordinates processes on one host, not a shared network cache.
 - Automatic key sweeping only revokes dead or finished runs with a local ownership record.
   Failed mint/revoke attempts retain that record for the next sweep.
