@@ -24,6 +24,16 @@ Automatic placement requires Harbor's capacity helper; use
 `AGENT_RUN_PLACEMENT` to select it. Explicit `--placement remote` does not
 require Harbor on the control host.
 
+Install `agent-run` on the control host from the approved Crabhelm checkout:
+
+```sh
+npm install --global --install-links --prefix "$HOME/.local" ./agent-run
+agent-run --help
+```
+
+Keep `$HOME/.local/bin` on `PATH`. Repeat the install after updating the
+checkout. This installs the CLI without building the Crabhelm control plane.
+
 ## Dispatch
 
 Check current capacity with `crabbox serve machines`. The only approved donor
@@ -36,7 +46,7 @@ never reports it, and the crabbox user config pins unpinned serve leases with
 ```sh
 export AGENT_RUN_CRABBOX_MACHINE=lue-dl360-worker-01-donor
 export AGENT_RUN_CRABBOX_TYPE=cpu2  # cpu4 is also supported
-node agent-run/bin/agent-run.mjs \
+agent-run \
   --harness pi --model clawrouter/gpt-6-astra-200k --thinking low \
   --prompt-file task.md --placement remote --out ./results/pi
 ```
